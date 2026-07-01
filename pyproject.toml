@@ -1,0 +1,16 @@
+[project]
+name = "powerlifting-coach"
+version = "0.1.0"
+description = "Local, agentic RAG system for powerlifting training analysis and program generation."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
