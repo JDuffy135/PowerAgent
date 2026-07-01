@@ -1,0 +1,47 @@
+{
+  "sessions": [
+    {
+      "date": "2026-06-19",
+      "day_label": "w4d6",
+      "week_number": 4,
+      "day_number": 6,
+      "session_type": "lifting",
+      "raw_note": "2026-06-19 w4d6\nSquat: 385x1, 315x4, 315x4, 315x4",
+      "sets": [
+        {
+          "exercise_raw": "Squat",
+          "set_index": 1,
+          "weight_lb": 385.0,
+          "reps": 1,
+          "is_top_set": true,
+          "raw_text": "385x1",
+          "confidence": 1.0
+        },
+        {
+          "exercise_raw": "Squat",
+          "set_index": 2,
+          "weight_lb": 315.0,
+          "reps": 4,
+          "raw_text": "315x4",
+          "confidence": 1.0
+        },
+        {
+          "exercise_raw": "Squat",
+          "set_index": 3,
+          "weight_lb": 315.0,
+          "reps": 4,
+          "raw_text": "315x4",
+          "confidence": 1.0
+        },
+        {
+          "exercise_raw": "Squat",
+          "set_index": 4,
+          "weight_lb": 315.0,
+          "reps": 4,
+          "raw_text": "315x4",
+          "confidence": 1.0
+        }
+      ]
+    }
+  ]
+}

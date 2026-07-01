@@ -1,8 +1,10 @@
-# Powerlifting Coach — Data Foundation (Step 1)
+# Powerlifting Coach — Data Foundation + LLM Extraction (Steps 1–2)
 
-SQLite schema, exercise resolver, seed data, and four typed query tools for the
-training-log analyst described in `ARCHITECTURE.md`. No LLM, LangGraph, or
-Chroma code lives here yet — see `CLAUDE_CODE_STEP_1.md` for scope.
+SQLite schema, exercise resolver, seed data, and four typed query tools
+(Step 1), plus the LLM extraction pipeline that turns raw log text into a
+schema-validated `ParsedBatch` (Step 2). See `ARCHITECTURE.md` for the full
+design, `CLAUDE_CODE_STEP_1.md` / `HANDOFF_STEP_2.md` for what each step
+covered. No LangGraph, Chroma, HITL commit path, or CLI yet.
 
 ## Setup
 
@@ -72,11 +74,34 @@ You can also run the demo block directly:
 python -m src.tools.queries
 ```
 
+## Ingestion pipeline (Step 2)
+
+```python
+from src.ingest.loaders import parse_upload
+from src.ingest.extract import extract_training_data
+
+text = parse_upload("some_log.txt")
+batch = extract_training_data(text, conn=conn)  # conn optional, read-only exercise resolution
+```
+
+- `src/ingest/models.py` — `ParsedBatch` (sessions → sets/cardio/programmed_slots,
+  plus `new_exercise_candidates` for names that didn't resolve).
+- `src/ingest/loaders.py` — `parse_upload(path)`; `.txt` supported now, `.xlsx`/`.pdf` raise
+  `NotImplementedError` (stubbed for a later step).
+- `src/ingest/extract.py` — `extract_training_data(text, conn=None, llm=None)`. `get_llm(node)`
+  is the provider seam (`config.yaml` → `nodes.<node>`): local Ollama (Qwen3 14B, structured
+  JSON output) by default, cloud-flippable later. Pure w.r.t. the DB — `conn` is only used
+  read-only via `resolve_exercise`; nothing is written or committed here (that's Step 3).
+- `tests/ingest/` — golden-file tests. Since there's no live model in this environment, tests
+  inject a stub `llm` callable that returns each fixture's golden JSON, exercising the real
+  parse→validate→resolve pipeline without depending on a running Ollama server.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
-`src/tools/queries.py`, `src/seed.py`, full pytest coverage.
+`src/tools/queries.py`, `src/seed.py` (Step 1); `src/ingest/models.py`,
+`src/ingest/loaders.py`, `src/ingest/extract.py` (Step 2); full pytest coverage for both.
 
 Explicitly not implemented (future steps per `ARCHITECTURE.md`): LangGraph
-agent graph, Ollama/LLM calls, Chroma vector store, file ingestion (xlsx/txt
-parsing), CLI chat, program generation.
+agent graph, Chroma vector store, HITL staging/commit path (`ingest_batch` →
+SQLite/Chroma), xlsx/pdf loading, CLI chat, program generation.

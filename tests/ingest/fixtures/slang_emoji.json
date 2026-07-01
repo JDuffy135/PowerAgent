@@ -1,0 +1,22 @@
+{
+  "sessions": [
+    {
+      "date": "2026-06-21",
+      "day_label": "w5d1",
+      "week_number": 5,
+      "day_number": 1,
+      "session_type": "lifting",
+      "raw_note": "2026-06-21 w5d1\nBench Press: 225x3 🔥 sintiendo fuerte hoy, nueva PR de la semana!!",
+      "sets": [
+        {
+          "exercise_raw": "Bench Press",
+          "set_index": 1,
+          "weight_lb": 225.0,
+          "reps": 3,
+          "raw_text": "225x3",
+          "confidence": 1.0
+        }
+      ]
+    }
+  ]
+}

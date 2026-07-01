@@ -1,0 +1,41 @@
+{
+  "sessions": [
+    {
+      "date": "2026-06-18",
+      "day_label": "w4d5",
+      "week_number": 4,
+      "day_number": 5,
+      "session_type": "lifting",
+      "raw_note": "2026-06-18 w4d5\nMAG Grip Pulldowns: 14 @ 143, 17 @ 121 (pin dropped from 143 after set 1), 15 @ 121",
+      "sets": [
+        {
+          "exercise_raw": "MAG Grip Pulldowns",
+          "set_index": 1,
+          "weight_lb": 143.0,
+          "reps": 14,
+          "equipment_note": "pin 143",
+          "raw_text": "14 @ 143",
+          "confidence": 0.8
+        },
+        {
+          "exercise_raw": "MAG Grip Pulldowns",
+          "set_index": 2,
+          "weight_lb": 121.0,
+          "reps": 17,
+          "equipment_note": "pin 121 (dropped from 143 after set 1)",
+          "raw_text": "17 @ 121 (pin dropped from 143 after set 1)",
+          "confidence": 0.8
+        },
+        {
+          "exercise_raw": "MAG Grip Pulldowns",
+          "set_index": 3,
+          "weight_lb": 121.0,
+          "reps": 15,
+          "equipment_note": "pin 121",
+          "raw_text": "15 @ 121",
+          "confidence": 0.8
+        }
+      ]
+    }
+  ]
+}

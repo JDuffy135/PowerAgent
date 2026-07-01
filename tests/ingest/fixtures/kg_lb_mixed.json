@@ -1,0 +1,22 @@
+{
+  "sessions": [
+    {
+      "date": "2026-06-15",
+      "day_label": "w4d2",
+      "week_number": 4,
+      "day_number": 2,
+      "session_type": "lifting",
+      "raw_note": "2026-06-15 w4d2\nBench Press: 1x3 @ 170KG",
+      "sets": [
+        {
+          "exercise_raw": "Bench Press",
+          "set_index": 1,
+          "weight_lb": 374.8,
+          "reps": 3,
+          "raw_text": "1x3 @ 170KG",
+          "confidence": 0.9
+        }
+      ]
+    }
+  ]
+}

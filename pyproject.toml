@@ -5,6 +5,7 @@ description = "Local, agentic RAG system for powerlifting training analysis and 
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

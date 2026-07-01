@@ -1,0 +1,38 @@
+{
+  "sessions": [
+    {
+      "date": "2026-06-22",
+      "day_label": "w5d2",
+      "week_number": 5,
+      "day_number": 2,
+      "session_type": "lifting",
+      "raw_note": "2026-06-22 w5d2\nBulgarian Split Squats: 3x10 @ 40",
+      "sets": [
+        {
+          "exercise_raw": "Bulgarian Split Squats",
+          "set_index": 1,
+          "weight_lb": 40.0,
+          "reps": 10,
+          "raw_text": "3x10 @ 40",
+          "confidence": 1.0
+        },
+        {
+          "exercise_raw": "Bulgarian Split Squats",
+          "set_index": 2,
+          "weight_lb": 40.0,
+          "reps": 10,
+          "raw_text": "3x10 @ 40",
+          "confidence": 1.0
+        },
+        {
+          "exercise_raw": "Bulgarian Split Squats",
+          "set_index": 3,
+          "weight_lb": 40.0,
+          "reps": 10,
+          "raw_text": "3x10 @ 40",
+          "confidence": 1.0
+        }
+      ]
+    }
+  ]
+}
