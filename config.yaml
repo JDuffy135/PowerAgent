@@ -1,13 +1,20 @@
 display_unit: lb
 db_path: data/training.db
 chroma_path: data/chroma
+# LangGraph checkpointer DB -- separate file from training.db by decision, so
+# interrupt/resume state never mixes with domain data.
+checkpoints_db: data/checkpoints.db
 
 # Per-node model routing (ARCHITECTURE.md §6.3). Each node in the agent graph
-# fetches its model via src.ingest.extract.get_llm(node) (or the future
-# src.agent.llm_provider equivalent) so switching a node to a cloud provider
-# is a config edit, not a code change.
+# fetches its model via src.agent.llm_provider (get_llm for raw structured
+# output, get_chat_model for LangChain chat models) so switching a node to a
+# cloud provider is a config edit, not a code change.
 nodes:
   ingest_extract:
+    provider: local
+    model: qwen3:14b
+    host: http://localhost:11434
+  ingest_correct:
     provider: local
     model: qwen3:14b
     host: http://localhost:11434
@@ -15,4 +22,11 @@ nodes:
     provider: local
     model: nomic-embed-text
     host: http://localhost:11434
-
+  router:
+    provider: local
+    model: qwen3:14b
+    host: http://localhost:11434
+  chitchat:
+    provider: local
+    model: qwen3:14b
+    host: http://localhost:11434

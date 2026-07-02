@@ -282,3 +282,63 @@ def test_commit_embeds_prose_with_fake_backend(conn, fake_embedder, chroma_clien
     meta = collection.get(include=["metadatas"])["metadatas"][0]
     assert meta["doc_type"] == "session_note"
     assert "Low Bar Squat" in meta["exercises"]  # "Squat" resolved to canonical name
+
+
+# ---------------------------------------------------------------------------
+# Stage 5: block assignment at commit time
+# ---------------------------------------------------------------------------
+
+def _batch_with_slot() -> ParsedBatch:
+    from src.ingest.models import ParsedProgrammedSlot
+
+    batch = _known_batch()
+    batch.sessions[0].week_number = 1
+    batch.sessions[0].day_number = 1
+    batch.sessions[0].programmed_slots = [
+        ParsedProgrammedSlot(
+            exercise_raw="Squat", prescription="1x1 @ RPE 9, 3x5", target_weight_lb=315.0
+        ),
+        ParsedProgrammedSlot(
+            exercise_raw="Mystery Machine Press", prescription="3x12"
+        ),
+    ]
+    return batch
+
+
+def test_commit_with_block_id_attaches_sessions_and_inserts_slots(conn):
+    block_id = conn.execute("SELECT block_id FROM block LIMIT 1").fetchone()["block_id"]
+    batch_id = stage_batch(conn, _batch_with_slot())
+
+    result = commit_batch(conn, batch_id, block_id=block_id, embed_prose=False)
+
+    assert result.programmed_slots_created == 2
+    assert result.programmed_slots_skipped == 0
+
+    session = conn.execute("SELECT * FROM session WHERE date='2026-07-01'").fetchone()
+    assert session["block_id"] == block_id
+
+    slots = conn.execute(
+        "SELECT * FROM programmed_slot WHERE block_id = ? AND week_number = 1 AND day_number = 1",
+        (block_id,),
+    ).fetchall()
+    assert len(slots) == 2
+    by_prescription = {s["prescription"]: s for s in slots}
+    assert by_prescription["1x1 @ RPE 9, 3x5"]["exercise_id"] is not None  # resolved squat
+    # Slot-only unresolvable exercise inserts with NULL rather than failing the commit.
+    assert by_prescription["3x12"]["exercise_id"] is None
+
+
+def test_commit_with_unknown_block_raises_and_writes_nothing(conn):
+    from src.ingest.commit import UnknownBlock
+
+    batch_id = stage_batch(conn, _batch_with_slot())
+    before = conn.execute("SELECT COUNT(*) AS n FROM session").fetchone()["n"]
+
+    with pytest.raises(UnknownBlock):
+        commit_batch(conn, batch_id, block_id=999999, embed_prose=False)
+
+    assert conn.execute("SELECT COUNT(*) AS n FROM session").fetchone()["n"] == before
+    status = conn.execute(
+        "SELECT status FROM ingest_batch WHERE batch_id = ?", (batch_id,)
+    ).fetchone()["status"]
+    assert status == "pending_review"  # still committable after fixing the block id

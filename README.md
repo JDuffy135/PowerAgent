@@ -1,13 +1,15 @@
-# Powerlifting Coach — Data Foundation + Ingestion + Full Tool Layer (Steps 1–4)
+# Powerlifting Coach — Data Foundation + Ingestion + Tools + LangGraph Core (Steps 1–5)
 
 SQLite schema, exercise resolver, seed data, and four typed query tools
 (Step 1); the LLM extraction pipeline that turns raw log text into a
 schema-validated `ParsedBatch` (Step 2); the HITL staging + transactional
-commit path plus Chroma prose embedding (Step 3); and the rest of the typed
+commit path plus Chroma prose embedding (Step 3); the rest of the typed
 query tools plus Chroma semantic search and a gated read-only SQL escape hatch
-(Step 4). See `ARCHITECTURE.md` for the full design, `CLAUDE_CODE_STEP_1.md` /
-`HANDOFF_STEP_3.md` / `HANDOFF_STEP_4.md` for what each step covered. No
-LangGraph graph, router, ANALYZE/GENERATE nodes, or CLI yet.
+(Step 4); and the LangGraph agent core — router, INGEST pipeline with
+interrupt-based HITL review (corrections + block assignment), SqliteSaver
+checkpointing, and a minimal CLI REPL (Step 5). See `ARCHITECTURE.md` for the
+full design and `HANDOFF_STEP_5.md` for the latest handoff. ANALYZE / GENERATE
+/ UPDATE_STATS are placeholder nodes until Stages 6–7.
 
 ## Setup
 
@@ -189,6 +191,29 @@ from src.tools.sql import run_readonly_sql
   `PRAGMA query_only=ON` (always restored after, even on error), and caps rows
   via an outer `LIMIT`.
 
+## LangGraph agent core + CLI (Step 5)
+
+```bash
+python -m src.cli
+```
+
+Starts a chat REPL over the agent graph (requires a live Ollama server for
+routing/extraction/chitchat). `/ingest <path>` ingests a `.txt` training log:
+the parse is staged and shown for review — reply `approve`, `reject`, or
+describe corrections in plain text (a correction LLM re-emits the full batch;
+capped at 5 rounds). On approval you're asked which program/block the batch
+belongs to: an existing block id, `new <program> / <block>` (created on the
+fly, which also unlocks `programmed_slot` insertion), or `none` to leave it
+unattached and organize later. Nothing durable is written before approval.
+
+Key modules: `src/agent/llm_provider.py` (per-node model routing —
+`get_chat_model` returns a `ChatOllama`; cloud providers raise until Stage 7),
+`src/agent/state.py`, `src/agent/nodes/{router,ingest,chitchat}.py`,
+`src/agent/graph.py` (topology + `SqliteSaver` checkpointer in a separate
+`data/checkpoints.db`), `src/ingest/correct.py` (HITL correction pass),
+`src/cli.py`. All graph paths are covered by stub-LLM tests
+(`tests/agent/`) — no live model needed for the suite.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
@@ -196,9 +221,12 @@ Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`
 `src/ingest/loaders.py`, `src/ingest/extract.py` (Step 2); `src/ingest/stage.py`,
 `src/ingest/review.py`, `src/ingest/commit.py`, `src/ingest/embed.py` (Step 3);
 the rest of `src/tools/queries.py`, `src/tools/vector.py`, `src/tools/sql.py`
-(Step 4); full pytest coverage throughout (107 tests).
+(Step 4); `src/agent/` (graph, router, INGEST HITL flow, provider),
+`src/ingest/correct.py`, `src/cli.py` (Step 5); full pytest coverage
+throughout (141 tests).
 
 Explicitly not implemented (future steps per `ARCHITECTURE.md` /
-`IMPLEMENTATION_ROADMAP.md`): LangGraph agent graph, router, ANALYZE/GENERATE
-nodes, xlsx/pdf loading, `search_knowledge`/knowledge-base ingestion, CLI chat,
-program generation, cloud provider branch.
+`IMPLEMENTATION_ROADMAP.md`): ANALYZE ReAct loop, SYNTHESIZE, UPDATE_STATS
+(placeholder nodes reply "not implemented yet"), program generation (GENERATE),
+cloud provider branch, xlsx/pdf loading, `search_knowledge`/knowledge-base
+ingestion, Streamlit/Gradio UI.

@@ -25,6 +25,15 @@ class BatchNotFound(Exception):
         super().__init__(f"No ingest_batch row with batch_id={batch_id}")
 
 
+class BatchNotEditable(Exception):
+    """Raised when `update_batch` targets a batch that is no longer pending review."""
+
+    def __init__(self, batch_id: int, status: str):
+        self.batch_id = batch_id
+        self.status = status
+        super().__init__(f"Cannot edit batch {batch_id}: status is {status!r}")
+
+
 def stage_batch(
     conn: sqlite3.Connection,
     parsed: ParsedBatch,
@@ -62,3 +71,26 @@ def get_pending_batch(conn: sqlite3.Connection, batch_id: int) -> ParsedBatch:
     if row is None:
         raise BatchNotFound(batch_id)
     return ParsedBatch.model_validate_json(row["parsed_json"])
+
+
+def update_batch(conn: sqlite3.Connection, batch_id: int, parsed: ParsedBatch) -> None:
+    """Overwrite a *pending* batch's `parsed_json` with a corrected `ParsedBatch`.
+
+    This is the HITL correction pass's write path: the user's free-text edits are
+    applied to the staged JSON, never to training tables. Only `pending_review`
+    rows may be edited -- a committed/rejected batch is a sealed audit record
+    (`BatchNotEditable`).
+    """
+    row = conn.execute(
+        "SELECT status FROM ingest_batch WHERE batch_id = ?", (batch_id,)
+    ).fetchone()
+    if row is None:
+        raise BatchNotFound(batch_id)
+    if row["status"] != "pending_review":
+        raise BatchNotEditable(batch_id, row["status"])
+
+    conn.execute(
+        "UPDATE ingest_batch SET parsed_json = ? WHERE batch_id = ?",
+        (parsed.model_dump_json(), batch_id),
+    )
+    conn.commit()

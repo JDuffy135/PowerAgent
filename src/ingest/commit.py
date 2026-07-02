@@ -16,10 +16,14 @@ State machine (idempotent / no double-insert):
 writing no training data. Rejecting an already-rejected batch is a no-op;
 rejecting a committed one raises.
 
-**Programmed slots this step:** `programmed_slot.block_id` is `NOT NULL`, but
-block assignment isn't built until a later step, so parsed programmed slots are
-*not* inserted here -- they're counted as `programmed_slots_skipped` and remain
-preserved verbatim in the batch's `parsed_json` audit trail for later.
+**Block assignment (Stage 5 [DECISION]):** `commit_batch` takes an optional
+`block_id`. When given, every inserted session is attached to that block and the
+batch's parsed programmed slots are inserted as `programmed_slot` rows (slot
+exercises resolve best-effort -- `programmed_slot.exercise_id` is nullable, so
+an unresolvable planned exercise inserts with NULL rather than failing the
+commit). When `block_id` is None (the user chose to leave the batch unattached
+and organize later), sessions get `block_id=NULL` and slots are counted as
+`programmed_slots_skipped`, preserved verbatim in the `parsed_json` audit trail.
 """
 from __future__ import annotations
 
@@ -39,6 +43,7 @@ class CommitResult(BaseModel):
     sessions_created: int = 0
     sets_created: int = 0
     cardio_created: int = 0
+    programmed_slots_created: int = 0
     programmed_slots_skipped: int = 0
     exercises_created: int = 0
     notes_embedded: int = 0
@@ -52,6 +57,14 @@ class BatchNotCommittable(Exception):
         self.batch_id = batch_id
         self.status = status
         super().__init__(f"Cannot {action} batch {batch_id}: status is {status!r}")
+
+
+class UnknownBlock(Exception):
+    """Raised when `commit_batch` is given a `block_id` that doesn't exist."""
+
+    def __init__(self, block_id: int):
+        self.block_id = block_id
+        super().__init__(f"No block with block_id={block_id}")
 
 
 class UnresolvedExercise(Exception):
@@ -78,6 +91,7 @@ def commit_batch(
     conn: sqlite3.Connection,
     batch_id: int,
     *,
+    block_id: int | None = None,
     embedder=None,
     chroma_client=None,
     embed_prose: bool = True,
@@ -85,8 +99,11 @@ def commit_batch(
     """Commit an approved batch's parsed data into SQLite (transactionally),
     then embed its session prose into Chroma.
 
-    `embedder`/`chroma_client` are the embed seams from `embed.py`; tests inject
-    fakes. Set `embed_prose=False` to skip Chroma entirely (SQLite commit only).
+    `block_id`, if given, attaches every inserted session to that block and
+    inserts the batch's programmed slots (see module docstring); `UnknownBlock`
+    if it doesn't exist. `embedder`/`chroma_client` are the embed seams from
+    `embed.py`; tests inject fakes. Set `embed_prose=False` to skip Chroma
+    entirely (SQLite commit only).
     """
     status = _status(conn, batch_id)
     if status == "committed":
@@ -94,10 +111,17 @@ def commit_batch(
     if status != "pending_review":
         raise BatchNotCommittable(batch_id, status, "commit")
 
+    if block_id is not None:
+        exists = conn.execute(
+            "SELECT 1 FROM block WHERE block_id = ?", (block_id,)
+        ).fetchone()
+        if exists is None:
+            raise UnknownBlock(block_id)
+
     parsed = get_pending_batch(conn, batch_id)
 
     try:
-        counts, notes = _insert_batch(conn, parsed)
+        counts, notes = _insert_batch(conn, parsed, block_id=block_id)
         conn.execute(
             "UPDATE ingest_batch SET status = 'committed' WHERE batch_id = ?",
             (batch_id,),
@@ -146,15 +170,18 @@ def reject_batch(conn: sqlite3.Connection, batch_id: int) -> bool:
 # --------------------------------------------------------------------------
 
 def _resolve_and_create_exercises(
-    conn: sqlite3.Connection, parsed: ParsedBatch
+    conn: sqlite3.Connection, parsed: ParsedBatch, include_slots: bool = False
 ) -> tuple[dict[str, tuple[int, str]], int]:
     """Return (normalized-raw-name -> (exercise_id, canonical_name), created_count).
 
     Known names reuse their existing `exercise_id`; confirmed new-exercise
     candidates are created via `add_exercise(commit=False)` (auto-confirmed this
     step -- Step 4's HITL supplies user edits). Existing exercises are never
-    duplicated. A set whose raw name neither resolves nor has a candidate raises
-    `UnresolvedExercise`, which rolls the whole commit back.
+    duplicated. A *set* whose raw name neither resolves nor has a candidate
+    raises `UnresolvedExercise`, which rolls the whole commit back. Programmed
+    slots (only considered when `include_slots`, i.e. a block assignment makes
+    them insertable) resolve best-effort: an unresolvable slot name is simply
+    left out of the mapping (its row inserts with `exercise_id=NULL`).
     """
     candidate_by_key = {
         _normalize(c.raw_name): c for c in parsed.new_exercise_candidates
@@ -163,45 +190,56 @@ def _resolve_and_create_exercises(
     mapping: dict[str, tuple[int, str]] = {}
     created = 0
 
-    for session in parsed.sessions:
-        for parsed_set in session.sets:  # slots are skipped this step; don't create for them
-            raw = parsed_set.exercise_raw
-            key = _normalize(raw)
-            if key in mapping:
-                continue
+    def ensure(raw: str, strict: bool) -> None:
+        nonlocal created
+        key = _normalize(raw)
+        if key in mapping:
+            return
 
-            resolved = resolve_exercise(conn, raw)
-            if resolved is not None:
-                mapping[key] = (resolved.exercise_id, resolved.name)
-                continue
+        resolved = resolve_exercise(conn, raw)
+        if resolved is not None:
+            mapping[key] = (resolved.exercise_id, resolved.name)
+            return
 
-            candidate = candidate_by_key.get(key)
-            if candidate is None:
+        candidate = candidate_by_key.get(key)
+        if candidate is None:
+            if strict:
                 raise UnresolvedExercise(raw)
+            return  # slot-only name with no candidate -> NULL exercise_id
 
-            new_id = add_exercise(
-                conn,
-                candidate.suggested_name,
-                candidate.suggested_tier,
-                candidate.suggested_muscle_group,
-                [candidate.raw_name],
-                commit=False,
-            )
-            created += 1
-            mapping[key] = (new_id, candidate.suggested_name)
+        new_id = add_exercise(
+            conn,
+            candidate.suggested_name,
+            candidate.suggested_tier,
+            candidate.suggested_muscle_group,
+            [candidate.raw_name],
+            commit=False,
+        )
+        created += 1
+        mapping[key] = (new_id, candidate.suggested_name)
+
+    for session in parsed.sessions:
+        for parsed_set in session.sets:
+            ensure(parsed_set.exercise_raw, strict=True)
+        if include_slots:
+            for slot in session.programmed_slots:
+                ensure(slot.exercise_raw, strict=False)
 
     return mapping, created
 
 
-def _insert_session(conn: sqlite3.Connection, session: ParsedSession) -> int:
+def _insert_session(
+    conn: sqlite3.Connection, session: ParsedSession, block_id: int | None
+) -> int:
     return conn.execute(
         """
         INSERT INTO session (date, block_id, week_number, day_number, day_label,
                              duration_min, session_type, raw_note)
-        VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session.date,
+            block_id,
             session.week_number,
             session.day_number,
             session.day_label,
@@ -213,17 +251,20 @@ def _insert_session(conn: sqlite3.Connection, session: ParsedSession) -> int:
 
 
 def _insert_batch(
-    conn: sqlite3.Connection, parsed: ParsedBatch
+    conn: sqlite3.Connection, parsed: ParsedBatch, block_id: int | None = None
 ) -> tuple[dict[str, int], list[SessionNote]]:
     """Insert every session and its child rows. Assumes the caller owns the
     transaction (no commit here)."""
-    exercise_map, exercises_created = _resolve_and_create_exercises(conn, parsed)
+    exercise_map, exercises_created = _resolve_and_create_exercises(
+        conn, parsed, include_slots=block_id is not None
+    )
 
-    sessions_created = sets_created = cardio_created = slots_skipped = 0
+    sessions_created = sets_created = cardio_created = 0
+    slots_created = slots_skipped = 0
     notes: list[SessionNote] = []
 
     for session in parsed.sessions:
-        session_id = _insert_session(conn, session)
+        session_id = _insert_session(conn, session, block_id)
         sessions_created += 1
 
         canonical_names: list[str] = []
@@ -273,7 +314,30 @@ def _insert_batch(
             )
             cardio_created += 1
 
-        slots_skipped += len(session.programmed_slots)
+        if block_id is None:
+            slots_skipped += len(session.programmed_slots)
+        else:
+            for slot in session.programmed_slots:
+                resolved = exercise_map.get(_normalize(slot.exercise_raw))
+                conn.execute(
+                    """
+                    INSERT INTO programmed_slot (block_id, week_number, day_number,
+                                                 day_label, exercise_id, prescription,
+                                                 target_weight_lb, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        block_id,
+                        session.week_number,
+                        session.day_number,
+                        session.day_label,
+                        resolved[0] if resolved is not None else None,
+                        slot.prescription,
+                        slot.target_weight_lb,
+                        slot.notes,
+                    ),
+                )
+                slots_created += 1
 
         notes.append(
             SessionNote(
@@ -288,6 +352,7 @@ def _insert_batch(
         "sessions_created": sessions_created,
         "sets_created": sets_created,
         "cardio_created": cardio_created,
+        "programmed_slots_created": slots_created,
         "programmed_slots_skipped": slots_skipped,
         "exercises_created": exercises_created,
     }

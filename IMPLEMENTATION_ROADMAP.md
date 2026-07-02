@@ -34,7 +34,8 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_4.md` for the full writeup, and the "Full tool layer (Step 4)"
+`HANDOFF_STEP_5.md` (which superseded the Step 4 handoff) for current state,
+and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
 sets estimate load off the single latest bodyweight entry (0 if none exists);
@@ -100,12 +101,17 @@ have fixture data.
 
 ---
 
-## Stage 5 — LangGraph core: state, provider, ROUTER, INGEST node, minimal CLI
+## Stage 5 — LangGraph core: state, provider, ROUTER, INGEST node, minimal CLI ✅ DONE (2026-07-02)
 
 **Minimum effective model: opus + high** (fable + medium if available). This is
 the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 `SqliteSaver` checkpointer, graph topology, and testing all of it without a live
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
+
+**Status:** implemented. 141 tests passing (107 prior + 34 new). See
+`HANDOFF_STEP_5.md` for the full writeup and the "LangGraph agent core + CLI"
+section of `README.md` for usage. All five open decisions resolved — see the
+"Decisions" section below, now recording the final calls.
 
 ### Scope
 
@@ -146,31 +152,32 @@ Create `src/agent/` per ARCHITECTURE.md §4 and §7:
   log end-to-end with HITL approval; all graph paths covered by stub-LLM tests;
   existing 67 tests still green.
 
-### ⚠️ Decisions you need to make
+### ✅ Decisions (resolved by the user, 2026-07-02 — now locked in)
 
-- **LangChain coupling**: use `ChatOllama` from `langchain-ollama` (idiomatic
-  LangGraph, more deps) vs. keeping the current raw-`urllib` callable seam and
-  writing thin adapters. Recommendation: adopt `langchain-ollama` for the agent
-  graph (tool-calling in Stage 6 practically requires a `BaseChatModel`) while
-  leaving the Step 2 extraction seam as-is; but this shapes everything after, so
-  confirm.
-- **Correction-pass contract**: does the correction LLM re-emit a full
-  `ParsedBatch` (simple, re-validates everything) or a patch/diff (cheaper,
-  fiddlier)? Recommendation: full re-emit with the original JSON + user text in
-  the prompt. Cap the correct→re-render loop (e.g. 5 rounds) or loop forever?
-- **Block assignment at ingest** (deferred from Step 3): committed sessions
-  currently get `block_id=NULL`, and `programmed_slot` rows are preserved in
-  audit JSON but **not inserted** because they require a real `block_id`. Decide
-  the flow: (a) HITL review asks the user which program/block a batch belongs to
-  (create program/block rows on the fly), (b) infer from dates against existing
-  blocks, or (c) keep everything unattached until a later "organize" feature.
-  This decision unblocks programmed-slot insertion and `compare_programmed_vs_actual`
-  usefulness.
-- **How INGEST receives files**: does the user type a path in chat (router
-  detects intent + path), or is there a CLI command like `/ingest <path>`?
-  A dedicated command is more reliable with small local models.
-- **Checkpointer location**: separate `data/checkpoints.db` (recommended — keeps
-  `training.db` schema clean) vs. same file.
+- **LangChain coupling**: adopted `langchain-ollama` (`ChatOllama` via
+  `llm_provider.get_chat_model(node)`) for the agent graph; the Step 2 raw-
+  `urllib` `get_llm` callable seam stays as-is for structured-output pipelines
+  (extraction + correction) and is re-exported from `src/agent/llm_provider.py`,
+  the canonical import point going forward.
+- **Correction-pass contract**: full re-emit — the correction LLM receives the
+  original batch JSON + the user's free text and re-emits the complete
+  `ParsedBatch`, which re-validates in one shot (`src/ingest/correct.py`).
+  The correct→re-render loop is capped at **5 rounds**
+  (`MAX_CORRECTION_ROUNDS`); at the cap only approve/reject are accepted.
+- **Block assignment at ingest**: option (a) — after approval, the HITL flow
+  asks which program/block the batch belongs to (existing block id, `new
+  <program> / <block>` created on the fly with status `incomplete`, or `none`
+  to leave unattached). Assigning a block unblocks `programmed_slot` insertion.
+  Unattached/misfiled batches can be reorganized later — a "review and organize
+  programs/blocks" feature is planned (Stage 9 grab-bag) so ingest-time
+  mistakes are never permanent.
+- **How INGEST receives files**: a dedicated CLI command, `/ingest <path>`,
+  which presets `intent='ingest'` and skips the router (more reliable with
+  small local models). The eventual UI replaces this with drag-and-drop / an
+  "import from my PC" file picker; the graph input shape is already
+  UI-agnostic, so only the front-end changes.
+- **Checkpointer location**: separate `data/checkpoints.db` (`checkpoints_db`
+  in `config.yaml`), keeping `training.db` purely domain data.
 
 ---
 
@@ -330,6 +337,10 @@ Only start once the CLI flow is stable (§7 roadmap). Grab-bag, pick what matter
   writes them yet — they'd come from macrocycle-review ingestion).
 - Ops niceties: DB backup command, `ingest_batch` audit browser, re-embedding
   command for embedder swaps (§3.2 notes embedder changes require re-embedding).
+- **Program/block organizer** (committed to during Stage 5's block-assignment
+  decision): a review flow to reattach sessions to a different block, rename or
+  merge programs/blocks, and fix ingest-time assignment mistakes — so block
+  assignment at ingest never has to be perfect.
 
 ### ⚠️ Decisions
 

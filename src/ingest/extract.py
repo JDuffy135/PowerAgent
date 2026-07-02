@@ -61,27 +61,39 @@ separate step resolves it to a canonical exercise, so do not normalize or invent
 """
 
 
-def get_llm(node: str = "ingest_extract") -> LLMCallable:
+def get_llm(
+    node: str = "ingest_extract",
+    *,
+    system_prompt: str | None = None,
+    schema: dict | None = None,
+) -> LLMCallable:
     """Return a `prompt -> raw JSON string` callable for the given graph node.
 
     Reads `config.yaml`'s `nodes.<node>` section for `provider`/`model`/`host`;
     defaults to a local Ollama chat completion with structured output
     (the JSON schema of `ParsedBatch` passed as Ollama's `format` param).
+
+    `system_prompt`/`schema` default to the extraction prompt and `ParsedBatch`
+    schema; other structured-output nodes (e.g. the HITL correction pass) supply
+    their own. `src.agent.llm_provider` re-exports this as the shared raw seam.
     """
     cfg = _node_config(node)
     provider = cfg.get("provider", "local")
     if provider != "local":
-        raise NotImplementedError(f"Provider {provider!r} is not wired up yet (Step 2 is local-only)")
+        raise NotImplementedError(f"Provider {provider!r} is not wired up yet (cloud lands in Stage 7)")
 
     model = cfg.get("model", DEFAULT_MODEL)
     host = cfg.get("host", DEFAULT_OLLAMA_HOST)
-    schema = ParsedBatch.model_json_schema()
+    if schema is None:
+        schema = ParsedBatch.model_json_schema()
+    if system_prompt is None:
+        system_prompt = EXTRACTION_SYSTEM_PROMPT
 
     def _call(prompt: str) -> str:
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
