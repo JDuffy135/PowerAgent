@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS lift_set (
     is_amrap     INTEGER NOT NULL DEFAULT 0,
     is_top_set   INTEGER NOT NULL DEFAULT 0, -- heavy single/double before backoffs
     is_failed    INTEGER NOT NULL DEFAULT 0,
+    equipment_note TEXT,                      -- per-set pin/plate config, seat height, etc.
     raw_text     TEXT                        -- original substring, incl. any kg notation
 );
 

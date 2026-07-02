@@ -1,7 +1,12 @@
-"""Seed script: builds data/training.db with realistic sample training data.
+"""Seed script: builds data/sample.db with realistic sample training data.
 
 Idempotent via wipe-and-reload: all tables are cleared before inserting, so
 running this script multiple times always produces the same result.
+
+**Targets `data/sample.db`, never `data/training.db`.** `training.db` is the
+live database the HITL commit path (Step 3) writes real, user-approved logs
+into; a wipe-and-reload seeder must never be able to erase those. Keeping the
+sample data in a separate file makes re-seeding safe by construction.
 """
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.db.connection import get_conn, init_db
 from src.tools.resolve import add_exercise
 
-DB_PATH = Path(__file__).parent.parent / "data" / "training.db"
+DB_PATH = Path(__file__).parent.parent / "data" / "sample.db"
 
 TABLES_IN_DELETE_ORDER = [
     "pr",
@@ -30,6 +35,19 @@ TABLES_IN_DELETE_ORDER = [
     "program",
     "ingest_batch",
 ]
+
+
+def add_programmed_slot(conn, block_id, week_number, day_number, day_label,
+                         exercise_id, prescription, target_weight_lb=None, notes=None):
+    conn.execute(
+        """
+        INSERT INTO programmed_slot (block_id, week_number, day_number, day_label,
+                                      exercise_id, prescription, target_weight_lb, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (block_id, week_number, day_number, day_label, exercise_id, prescription,
+         target_weight_lb, notes),
+    )
 
 
 def wipe(conn) -> None:
@@ -243,6 +261,42 @@ def seed(conn) -> None:
         """,
         (s9, ex["deadlift"]),
     )
+
+    # --- Programmed slots (Strength Block 1) --------------------------------
+    # Matches S5's deadlift exactly (week 1, day 4): projected == actual.
+    add_programmed_slot(
+        conn, strength_block_id, 1, 4, "w1d4", ex["deadlift"],
+        "1x2 @ RPE 8, 3x4 @ RPE 7", target_weight_lb=335,
+    )
+    # Matches S6's squat (week 3, day 4) but the actual top single (295) came in
+    # under the projection (305) -- projected-vs-actual variance case.
+    add_programmed_slot(
+        conn, strength_block_id, 3, 4, "w3d4", ex["squat"],
+        "1x3 @ RPE 8, 4x4 @ RPE 7-8", target_weight_lb=305,
+    )
+    # No matching actual session was ever logged (week 2, day 1 bench) --
+    # programmed-but-not-performed case.
+    add_programmed_slot(
+        conn, strength_block_id, 2, 1, "w2d1", ex["bench"],
+        "1x3 @ RPE 7, 4x4 @ RPE 7-8", target_weight_lb=225,
+    )
+    # Hypertrophy Phase 1 and Peaking Block intentionally have NO programmed_slot
+    # rows, so compare_programmed_vs_actual against those blocks exercises the
+    # "actual data exists, nothing programmed" fallback path.
+
+    # --- Measurements --------------------------------------------------------
+    measurement_rows = [
+        ("2026-01-03", "arm", 14.5),
+        ("2026-03-07", "arm", 14.75),
+        ("2026-06-01", "arm", 15.0),
+        ("2026-01-03", "waist", 31.0),
+        ("2026-06-01", "waist", 32.0),
+    ]
+    for date, site, value_in in measurement_rows:
+        conn.execute(
+            "INSERT INTO measurement (date, site, value_in) VALUES (?, ?, ?)",
+            (date, site, value_in),
+        )
 
     # --- Injury -------------------------------------------------------------
     conn.execute(

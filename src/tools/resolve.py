@@ -88,8 +88,14 @@ def add_exercise(
     tier: Literal["competition", "variation", "accessory"],
     muscle_group: str | None,
     aliases: list[str],
+    commit: bool = True,
 ) -> int:
-    """Insert a new exercise plus its aliases. Returns the new exercise_id."""
+    """Insert a new exercise plus its aliases. Returns the new exercise_id.
+
+    Pass ``commit=False`` to enlist these inserts in a caller-managed
+    transaction (e.g. the transactional ingest commit path, which must be able
+    to roll every insert back together on a mid-commit failure).
+    """
     cur = conn.execute(
         "INSERT INTO exercise (name, tier, muscle_group) VALUES (?, ?, ?)",
         (name, tier, muscle_group),
@@ -100,5 +106,6 @@ def add_exercise(
             "INSERT OR IGNORE INTO exercise_alias (alias, exercise_id) VALUES (?, ?)",
             (_normalize(alias), exercise_id),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return exercise_id

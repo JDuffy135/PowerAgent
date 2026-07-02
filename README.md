@@ -1,10 +1,13 @@
-# Powerlifting Coach — Data Foundation + LLM Extraction (Steps 1–2)
+# Powerlifting Coach — Data Foundation + Ingestion + Full Tool Layer (Steps 1–4)
 
 SQLite schema, exercise resolver, seed data, and four typed query tools
-(Step 1), plus the LLM extraction pipeline that turns raw log text into a
-schema-validated `ParsedBatch` (Step 2). See `ARCHITECTURE.md` for the full
-design, `CLAUDE_CODE_STEP_1.md` / `HANDOFF_STEP_2.md` for what each step
-covered. No LangGraph, Chroma, HITL commit path, or CLI yet.
+(Step 1); the LLM extraction pipeline that turns raw log text into a
+schema-validated `ParsedBatch` (Step 2); the HITL staging + transactional
+commit path plus Chroma prose embedding (Step 3); and the rest of the typed
+query tools plus Chroma semantic search and a gated read-only SQL escape hatch
+(Step 4). See `ARCHITECTURE.md` for the full design, `CLAUDE_CODE_STEP_1.md` /
+`HANDOFF_STEP_3.md` / `HANDOFF_STEP_4.md` for what each step covered. No
+LangGraph graph, router, ANALYZE/GENERATE nodes, or CLI yet.
 
 ## Setup
 
@@ -20,9 +23,14 @@ pip install -e ".[dev]"
 python -m src.seed
 ```
 
-Builds `data/training.db` from scratch. Idempotent via wipe-and-reload: every
+Builds `data/sample.db` from scratch. Idempotent via wipe-and-reload: every
 run deletes all rows from every table, then re-inserts the sample dataset —
 so running it repeatedly always leaves the DB in the same state.
+
+The seeder targets **`data/sample.db`, never `data/training.db`.**
+`training.db` is the live database the HITL commit path writes real,
+user-approved logs into; keeping the wipe-and-reload sample data in a separate
+file makes re-seeding safe by construction.
 
 ## Tests
 
@@ -96,12 +104,101 @@ batch = extract_training_data(text, conn=conn)  # conn optional, read-only exerc
   inject a stub `llm` callable that returns each fixture's golden JSON, exercising the real
   parse→validate→resolve pipeline without depending on a running Ollama server.
 
+## HITL staging + commit path (Step 3)
+
+Parsing produces a `ParsedBatch`; nothing durable happens until the user
+approves. That bridge lives in `src/ingest/`:
+
+```python
+from src.ingest.extract import extract_training_data
+from src.ingest.stage import stage_batch, get_pending_batch
+from src.ingest.review import render_batch
+from src.ingest.commit import commit_batch, reject_batch
+
+batch = extract_training_data(text, conn=conn)      # Step 2
+batch_id = stage_batch(conn, batch, source_file="log.txt")  # -> ingest_batch(pending_review)
+
+print(render_batch(get_pending_batch(conn, batch_id)))      # readable HITL summary
+
+commit_batch(conn, batch_id)                        # transactional SQLite + Chroma embed
+# or: reject_batch(conn, batch_id)                  # writes nothing
+```
+
+- `stage.py` — `stage_batch` writes the `pending_review` audit-trail row (the
+  serialized batch JSON, no training data); `get_pending_batch` rehydrates it.
+- `review.py` — `render_batch(parsed) -> str`, a pure summary with every
+  `confidence < 1.0` field flagged. This is what Step 4's `interrupt()` shows.
+- `commit.py` — `commit_batch(conn, batch_id)` is **transactional**: it
+  resolves/creates exercises (`add_exercise(commit=False)`), inserts
+  `session`/`lift_set`/`cardio` rows, and flips the batch to `committed`, all in
+  one transaction — a mid-commit failure rolls everything back. Committing an
+  already-committed batch is a no-op; `reject_batch` is the terminal
+  `rejected` transition. Programmed slots are preserved in the audit JSON but
+  not inserted yet (they need block assignment, a later step).
+- `embed.py` — session `raw_note` prose is embedded into the Chroma
+  `personal_notes` collection (persistent client at `data/chroma/`) as part of
+  commit. `get_embedder()` / `get_chroma_client()` are seams (like `get_llm`):
+  tests inject a deterministic fake embedder + in-memory client, so no live
+  Ollama/`nomic-embed-text` is required. Pass `commit_batch(..., embed_prose=False)`
+  to skip Chroma.
+
+## Full tool layer (Step 4)
+
+The rest of ARCHITECTURE.md §5.1's typed tools, plus the vector-search and SQL
+escape-hatch tools from §3.2/§5.2:
+
+```python
+from src.tools.queries import (
+    get_sessions, get_frequency, get_volume_trend, get_prs, find_recent_prs,
+    commit_prs, get_injuries, get_measurements, get_programs, get_block_outline,
+    compare_programmed_vs_actual,
+)
+from src.tools.vector import search_notes
+from src.tools.sql import run_readonly_sql
+```
+
+- `get_volume_trend(exercise_or_muscle_group, date_from, date_to, by='week'|'block')`
+  returns both hard-set count and tonnage (lb) per bucket. Bodyweight-only sets
+  (`weight_lb IS NULL`) estimate load using the user's most recently logged
+  bodyweight (0 lb if none has ever been recorded) — NOT the bodyweight as of
+  that specific date, the single latest entry in the table.
+- `get_prs` reads only the manually-recorded `pr` table. `find_recent_prs(date_from,
+  date_to, exercise=None)` is a separate, read-only tool that auto-derives PR
+  candidates (sets whose Epley e1RM beats every prior set for that exercise,
+  all-time) without writing anything; pass user-accepted candidates to
+  `commit_prs(conn, candidates)` to insert them (idempotent — re-accepting a
+  candidate already in `pr` is a no-op).
+- `compare_programmed_vs_actual(block_id, exercise=None)` joins `programmed_slot`
+  to performed `lift_set` rows by `(week_number, day_number, exercise_id)`.
+  Mismatches are surfaced, never silently dropped: a programmed slot with no
+  matching session still appears in `rows` with `actual_*` fields `None`;
+  performed work with no matching slot appears in `unmatched_actual` (with its
+  session's `raw_note`); a block with zero `programmed_slot` rows returns
+  `rows=[]` plus a `note` explaining nothing was programmed, while still
+  surfacing `unmatched_actual`.
+- `search_notes(query, date_from=None, date_to=None, exercises=None, doc_type=None)`
+  — semantic search over the `personal_notes` Chroma collection. **At least one
+  metadata filter is required** (raises `ValueError` otherwise, per
+  ARCHITECTURE.md §3.2). Date filtering uses a numeric `date_ordinal` metadata
+  mirror of the display `date` string (Chroma's `$gte`/`$lte` require int/float
+  operands); `exercises` filtering is client-side substring containment since
+  Chroma stores the mentioned-exercises list as a comma-joined string.
+- `run_readonly_sql(conn, query, max_rows=200, timeout_s=5.0)` — the gated
+  escape hatch. Validates the query is a single `SELECT` via `sqlglot`
+  (rejects multi-statement input and any non-SELECT), runs it under
+  `PRAGMA query_only=ON` (always restored after, even on error), and caps rows
+  via an outer `LIMIT`.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
 `src/tools/queries.py`, `src/seed.py` (Step 1); `src/ingest/models.py`,
-`src/ingest/loaders.py`, `src/ingest/extract.py` (Step 2); full pytest coverage for both.
+`src/ingest/loaders.py`, `src/ingest/extract.py` (Step 2); `src/ingest/stage.py`,
+`src/ingest/review.py`, `src/ingest/commit.py`, `src/ingest/embed.py` (Step 3);
+the rest of `src/tools/queries.py`, `src/tools/vector.py`, `src/tools/sql.py`
+(Step 4); full pytest coverage throughout (107 tests).
 
-Explicitly not implemented (future steps per `ARCHITECTURE.md`): LangGraph
-agent graph, Chroma vector store, HITL staging/commit path (`ingest_batch` →
-SQLite/Chroma), xlsx/pdf loading, CLI chat, program generation.
+Explicitly not implemented (future steps per `ARCHITECTURE.md` /
+`IMPLEMENTATION_ROADMAP.md`): LangGraph agent graph, router, ANALYZE/GENERATE
+nodes, xlsx/pdf loading, `search_knowledge`/knowledge-base ingestion, CLI chat,
+program generation, cloud provider branch.

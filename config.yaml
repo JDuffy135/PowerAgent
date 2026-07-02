@@ -1,5 +1,6 @@
 display_unit: lb
 db_path: data/training.db
+chroma_path: data/chroma
 
 # Per-node model routing (ARCHITECTURE.md §6.3). Each node in the agent graph
 # fetches its model via src.ingest.extract.get_llm(node) (or the future
@@ -9,5 +10,9 @@ nodes:
   ingest_extract:
     provider: local
     model: qwen3:14b
+    host: http://localhost:11434
+  ingest_embed:
+    provider: local
+    model: nomic-embed-text
     host: http://localhost:11434
 
