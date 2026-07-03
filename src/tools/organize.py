@@ -235,6 +235,91 @@ def merge_programs(
     return moved
 
 
+# ---------------------------------------------------------------------------
+# Reviews (Stage 11b): write prose to SQLite AND (re-)embed it into Chroma
+# ---------------------------------------------------------------------------
+
+def get_block_review(conn: sqlite3.Connection, block_id: int) -> str | None:
+    row = _require(conn, "block", "block_id", block_id)
+    return row["review_text"]
+
+
+def get_program_review(conn: sqlite3.Connection, program_id: int) -> str | None:
+    row = _require(conn, "program", "program_id", program_id)
+    return row["review_text"]
+
+
+def set_block_review(
+    conn: sqlite3.Connection,
+    block_id: int,
+    text: str | None,
+    *,
+    embedder=None,
+    chroma_client=None,
+    embed: bool = True,
+) -> str | None:
+    """Save a block's review prose to `block.review_text` AND embed it into
+    Chroma `personal_notes` (`doc_type='block_review'`).
+
+    Idempotent: re-saving overwrites both the SQLite column and the single Chroma
+    doc (`block_review_<id>`); blank text clears the column and un-embeds it. The
+    SQLite write is committed before embedding, so a dead embedder never loses the
+    prose (the caller can surface the embed error separately). Returns the Chroma
+    doc id, or None when cleared / not embedded.
+    """
+    row = _require(conn, "block", "block_id", block_id)
+    clean = (text or "").strip() or None
+    conn.execute("UPDATE block SET review_text = ? WHERE block_id = ?", (clean, block_id))
+    conn.commit()
+    if not embed:
+        return None
+
+    from src.ingest.embed import BLOCK_REVIEW_DOC_TYPE, block_review_id, embed_review
+
+    return embed_review(
+        clean or "",
+        block_review_id(block_id),
+        BLOCK_REVIEW_DOC_TYPE,
+        date=row["end_date"] or row["start_date"],
+        block_id=block_id,
+        program_id=row["program_id"],
+        embedder=embedder,
+        client=chroma_client,
+    )
+
+
+def set_program_review(
+    conn: sqlite3.Connection,
+    program_id: int,
+    text: str | None,
+    *,
+    embedder=None,
+    chroma_client=None,
+    embed: bool = True,
+) -> str | None:
+    """Save a program's macrocycle review to `program.review_text` AND embed it
+    into Chroma `personal_notes` (`doc_type='program_review'`). Mirrors
+    `set_block_review`."""
+    row = _require(conn, "program", "program_id", program_id)
+    clean = (text or "").strip() or None
+    conn.execute("UPDATE program SET review_text = ? WHERE program_id = ?", (clean, program_id))
+    conn.commit()
+    if not embed:
+        return None
+
+    from src.ingest.embed import PROGRAM_REVIEW_DOC_TYPE, embed_review, program_review_id
+
+    return embed_review(
+        clean or "",
+        program_review_id(program_id),
+        PROGRAM_REVIEW_DOC_TYPE,
+        date=row["end_date"] or row["start_date"],
+        program_id=program_id,
+        embedder=embedder,
+        client=chroma_client,
+    )
+
+
 def start_draft(
     conn: sqlite3.Connection, program_id: int, start_date: str
 ) -> None:

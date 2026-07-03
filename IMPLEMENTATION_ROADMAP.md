@@ -1,8 +1,8 @@
 # Implementation Roadmap — Remaining Work (Stages 4–11)
 
 Master plan for finishing the Powerlifting Coach per `ARCHITECTURE.md`. Stages
-4–10 are **done** (253 tests passing as of 2026-07-03); **Stage 11 is the
-remaining work.** Steps 1–3 were done first (67 tests passing as of 2026-07-02):
+4–11 are **done** (278 tests passing as of 2026-07-03) — the roadmap is now
+complete. Steps 1–3 were done first (67 tests passing as of 2026-07-02):
 
 - **Step 1 — data spine:** full SQLite schema, `resolve_exercise`/`add_exercise`,
   `get_best_set` / `get_lifts` / `get_e1rm_trend` / `get_bodyweight_trend`, seeder
@@ -35,7 +35,7 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_10.md` (the current handoff) for current state,
+`HANDOFF_STEP_11.md` (the current handoff) for current state,
 and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
@@ -110,7 +110,7 @@ the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
 
 **Status:** implemented. 141 tests passing (107 prior + 34 new). See
-`HANDOFF_STEP_10.md` (the current handoff) for the full writeup and the
+`HANDOFF_STEP_11.md` (the current handoff) for the full writeup and the
 "LangGraph agent core + CLI"
 section of `README.md` for usage. All five open decisions resolved — see the
 "Decisions" section below, now recording the final calls.
@@ -191,7 +191,7 @@ left clean scaffolding). The code volume is moderate, but making a *local Qwen3
 benefits from stronger judgment.
 
 **Status:** implemented. 161 tests passing (141 prior + 20 new). See
-`HANDOFF_STEP_10.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
+`HANDOFF_STEP_11.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
 UPDATE_STATS (Step 6)" section of `README.md` for usage. All four open decisions
 resolved — see the "✅ Decisions" section below, now recording the final calls.
 
@@ -253,7 +253,7 @@ stage is in the GENERATE system prompt, and drafting/iterating that prompt is
 where opus + medium pays for itself. Recommendation: opus + medium.
 
 **Status:** implemented. 171 tests passing (161 prior + 10 net new). See
-`HANDOFF_STEP_10.md` for the full writeup and the "GENERATE (program writer) +
+`HANDOFF_STEP_11.md` for the full writeup and the "GENERATE (program writer) +
 cloud offload (Step 7)" section of `README.md` for usage. All four open
 decisions resolved — see the "✅ Decisions" section below, now recording the
 final calls.
@@ -322,7 +322,7 @@ established pipeline shape. Independent of Stages 5–7; can run any time after
 Stage 3 (only `search_knowledge` registration depends on Stage 6's tool wiring).
 
 **Status:** implemented. 198 tests passing (171 prior + 27 new). See
-`HANDOFF_STEP_10.md` for the full writeup and the "File loaders + knowledge base
+`HANDOFF_STEP_11.md` for the full writeup and the "File loaders + knowledge base
 (Step 8)" section of `README.md` for usage. All three open decisions resolved —
 see the "✅ Decisions" section below, now recording the final calls.
 
@@ -377,7 +377,7 @@ see the "✅ Decisions" section below, now recording the final calls.
 **Minimum effective model: sonnet + medium.**
 
 **Status:** implemented. 240 tests passing (198 prior + 42 new). See
-`HANDOFF_STEP_10.md` for the full writeup and the "Streamlit UI + backfill +
+`HANDOFF_STEP_11.md` for the full writeup and the "Streamlit UI + backfill +
 organizer + dev tools (Step 9)" section of `README.md` for usage. Built from
 the grab-bag: the Streamlit UI (`streamlit run src/ui/app.py` — chat with
 interrupt round-trips, organizer, backfill, and dev-tools tabs), the
@@ -431,7 +431,7 @@ query tool the tab needs already exists in `src/tools/queries.py`; the stage is
 Streamlit plumbing plus a testable chart-prep layer.
 
 **Status:** implemented. 253 tests passing (240 prior + 13 new). See
-`HANDOFF_STEP_10.md` for the full writeup and the "📈 Trends" section of
+`HANDOFF_STEP_11.md` for the full writeup and the "📈 Trends" section of
 `README.md` for usage. Built as scoped: `src/ui/trends_tab.py` (veneer) +
 streamlit-free `src/ui/trends.py` (chart prep, `tests/test_trends.py`), Altair
 layered charts, `MUSCLE_GROUPS` exported from `src/tools/queries.py`,
@@ -503,11 +503,31 @@ muscle group or lift.
 
 ---
 
-## Stage 11 — Deferred polish: kg end-to-end, review/form-cue embedding, re-embed command
+## Stage 11 — Deferred polish: kg end-to-end, review/form-cue embedding, re-embed command ✅ DONE (2026-07-03)
 
 **Minimum effective model: sonnet + high.** Three independent sub-tasks; 11a
 and 11c are mechanical, but 11b's chat path touches the HITL flow and deserves
 care.
+
+**Status:** implemented. 278 tests passing (253 prior + 25 new). See
+`HANDOFF_STEP_11.md` for the full writeup and the updated README (Trends kg
+toggle, Organizer reviews, `/reembed`). Built as scoped:
+
+- **11a** — `render_batch` (and the ingest-review node + backfill tab) now take
+  a `unit`; the Trends chart-prep helpers convert weight columns and the tab
+  axes/metrics carry the unit; `make_input`/`app.py` read `display_unit` from
+  config so every user-facing surface (HITL reviews, stat/draft confirms,
+  SYNTHESIZE, generate drafts, Trends, organizer) shows the chosen unit while
+  storage stays canonical lb. Dev Tools grid stays lb with a caption.
+- **11b** — `embed_review` in `src/ingest/embed.py` (single-doc, idempotent,
+  blank = un-embed); `set_block_review`/`set_program_review` in
+  `src/tools/organize.py` (SQLite `review_text` + Chroma upsert); Organizer tab
+  "Reviews" section; and a chat path via UPDATE_STATS (new `block_review` /
+  `form_cue` kinds, confirm-before-write, block reviews attach to the latest
+  block). `search_notes(doc_type=...)` retrieves them unchanged.
+- **11c** — `src/ingest/reembed.py` (`reembed_all` / `reembed_collection`,
+  build-then-swap, embedder-name stamped in collection metadata) + a `/reembed`
+  CLI command.
 
 ### 11a — `display_unit: kg` end-to-end
 
@@ -593,11 +613,13 @@ changing embedders requires re-embedding).
   drafts, Trends, organizer). Dev Tools raw grid excluded by design — it edits
   canonical DB columns, and round-tripping kg invites rounding drift.
 
-### ⚠️ Decisions you need to make (or explicitly delegate)
-
-- **Chat-detection routing** for 11b: extend the `update_stats` intent to
-  cover reviews/cues, or add a new router intent?
-- **Re-embed surface**: CLI-only command, or also a Dev Tools button?
+- **Chat-detection routing** for 11b (resolved at implementation time):
+  **extend `update_stats`** — the router prompt now lists reviews/cues under the
+  `update_stats` intent and `StatUpdate` gained `block_review` / `form_cue`
+  kinds, so no new graph topology was needed (parse → confirm → write is reused).
+- **Re-embed surface** (resolved at implementation time): **CLI-only**
+  (`/reembed`). Re-embedding needs a live embedder and can take a while; a
+  blocking Streamlit button is poor UX, so it stays a terminal command.
 
 ---
 

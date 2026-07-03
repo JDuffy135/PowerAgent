@@ -205,7 +205,7 @@ Two collections, persistent client (`data/chroma/`):
 Key decisions:
 - **Metadata `where` filters are mandatory** for `personal_notes` queries so semantic search respects time windows ("knee pain mentions in the last 2 blocks" = filter `block_id IN (...)` then similarity).
 - Structured rows and embedded prose are linked via `session_id`/`block_id`, so the agent can hop from a retrieved note to the exact numbers of that day, and vice versa.
-- Embedding model: **nomic-embed-text** (or BGE-M3 / Qwen3-Embedding) served via Ollama. Store the embedder name in collection metadata; changing embedders requires re-embedding.
+- Embedding model: **nomic-embed-text** (or BGE-M3 / Qwen3-Embedding) served via Ollama. Store the embedder name in collection metadata; changing embedders requires re-embedding. *Implemented (Stage 11c):* `src/ingest/reembed.py` rebuilds every collection with the configured embedder (build-then-swap) and stamps its name into collection metadata; exposed as the `/reembed` CLI command. Block/program reviews and form cues are written via `embed_review` (Stage 11b) as single, idempotent `personal_notes` docs (`doc_type` `block_review` / `program_review` / `form_cue`).
 
 ---
 
@@ -362,7 +362,7 @@ powerlifting-coach/
 │   └── chroma/
 ├── src/
 │   ├── db/                # schema.sql, connection, migrations
-│   ├── ingest/            # loaders, extraction prompts, Pydantic models
+│   ├── ingest/            # loaders, extraction, embedding, knowledge base, reembed
 │   ├── tools/             # typed query tools, vector search, sql escape hatch
 │   ├── agent/             # graph.py, nodes/, state.py, llm_provider.py
 │   ├── ui/                # Streamlit app: tab veneers + streamlit-free logic

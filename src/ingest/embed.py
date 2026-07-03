@@ -35,6 +35,13 @@ DEFAULT_CHROMA_PATH = Path(__file__).parent.parent.parent / "data" / "chroma"
 PERSONAL_NOTES_COLLECTION = "personal_notes"
 ANALYSIS_DOC_TYPE = "analysis"  # SYNTHESIZE output stored via the "store this analysis?" offer
 
+# Stage 11b doc types: block/program reviews and per-exercise form cues, all
+# embedded into `personal_notes` so `search_notes(doc_type=...)` (and GENERATE's
+# block-review retrieval) can pull them back.
+BLOCK_REVIEW_DOC_TYPE = "block_review"
+PROGRAM_REVIEW_DOC_TYPE = "program_review"
+FORM_CUE_DOC_TYPE = "form_cue"
+
 # A list of texts in, one embedding vector per text out.
 Embedder = Callable[[Sequence[str]], list[list[float]]]
 
@@ -91,6 +98,13 @@ def get_embedder(node: str = "ingest_embed") -> Embedder:
         return body["embeddings"]
 
     return _embed
+
+
+def embedder_name(node: str = "ingest_embed") -> str:
+    """The configured embedding model name for `node` (defaults to
+    `nomic-embed-text`). Stamped into collection metadata by the re-embed command
+    so a later embedder swap is detectable (ARCHITECTURE.md §3.2)."""
+    return _node_config(node).get("model", DEFAULT_EMBED_MODEL)
 
 
 def _chroma_path() -> Path:
@@ -167,6 +181,64 @@ def embed_session_notes(
         metadatas=metadatas,
     )
     return len(records)
+
+
+def embed_review(
+    text: str,
+    doc_id: str,
+    doc_type: str,
+    *,
+    date: str | None = None,
+    block_id: int = 0,
+    program_id: int = 0,
+    exercises: Sequence[str] = (),
+    embedder: Embedder | None = None,
+    client=None,
+    collection_name: str = PERSONAL_NOTES_COLLECTION,
+) -> str | None:
+    """Upsert one block/program review or form cue into `personal_notes` (Stage 11b).
+
+    Single-document (unchunked) and idempotent on `doc_id`, so re-saving an edited
+    review overwrites in place rather than duplicating. Blank `text` deletes any
+    existing doc under `doc_id` and returns None (clearing a review un-embeds it).
+    `session_id` is 0 (these aren't tied to a logged session); `block_id` /
+    `program_id` / `exercises` metadata let retrieval scope back to the source.
+    """
+    if embedder is None:
+        embedder = get_embedder()
+    if client is None:
+        client = get_chroma_client()
+
+    collection = client.get_or_create_collection(collection_name)
+
+    if not text or not text.strip():
+        collection.delete(ids=[doc_id])
+        return None
+
+    metadata = {
+        "date": date or "",
+        "date_ordinal": int(date.replace("-", "")) if date else 0,
+        "session_id": 0,
+        "doc_type": doc_type,
+        "exercises": ", ".join(exercises),
+        "block_id": block_id,
+        "program_id": program_id,
+    }
+    collection.upsert(
+        ids=[doc_id],
+        documents=[text],
+        embeddings=[embedder([text])[0]],
+        metadatas=[metadata],
+    )
+    return doc_id
+
+
+def block_review_id(block_id: int) -> str:
+    return f"block_review_{block_id}"
+
+
+def program_review_id(program_id: int) -> str:
+    return f"program_review_{program_id}"
 
 
 def embed_analysis(

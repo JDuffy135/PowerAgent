@@ -126,7 +126,7 @@ def make_ingest_review_node(
         prompt_parts = []
         if state.get("review_note"):
             prompt_parts.append(f"[note] {state['review_note']}\n")
-        prompt_parts.append(render_batch(batch))
+        prompt_parts.append(render_batch(batch, state.get("display_unit", "lb")))
         prompt_parts.append(REVIEW_INSTRUCTIONS_AT_CAP if at_cap else REVIEW_INSTRUCTIONS)
 
         reply = interrupt({

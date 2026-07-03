@@ -31,6 +31,11 @@ BACKUPS_DIR = "data/backups"
 
 def _table_editor(conn) -> None:
     st.subheader("Tables")
+    st.caption(
+        "Weights here are the canonical stored values in **pounds (lb)** — the "
+        "`display_unit` kg setting is presentation-only and never applies to this "
+        "grid, so edits round-trip without conversion drift."
+    )
     table = st.selectbox("Table", sorted(EDITABLE_TABLES), key="dev_table")
     pk = EDITABLE_TABLES[table]
     total = count_rows(conn, table)

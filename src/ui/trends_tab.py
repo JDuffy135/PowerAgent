@@ -11,6 +11,7 @@ import datetime as dt
 import altair as alt
 import streamlit as st
 
+from src.agent.units import to_display_weight
 from src.tools.queries import (
     MUSCLE_GROUPS,
     ExerciseNotFound,
@@ -25,7 +26,7 @@ from src.ui import trends
 _PR_COLOR = "#d62728"
 
 
-def render(conn) -> None:
+def render(conn, display_unit: str = "lb") -> None:
     default_from, default_to = trends.default_date_range()
     col1, col2 = st.columns(2)
     with col1:
@@ -41,16 +42,16 @@ def render(conn) -> None:
         return
 
     date_from, date_to = date_from.isoformat(), date_to.isoformat()
-    _render_bodyweight(conn, date_from, date_to)
-    _render_one_rm(conn, date_from, date_to)
+    _render_bodyweight(conn, date_from, date_to, display_unit)
+    _render_one_rm(conn, date_from, date_to, display_unit)
     _render_measurements(conn, date_from, date_to)
-    _render_volume(conn, date_from, date_to)
+    _render_volume(conn, date_from, date_to, display_unit)
 
 
-def _render_bodyweight(conn, date_from: str, date_to: str) -> None:
+def _render_bodyweight(conn, date_from: str, date_to: str, unit: str) -> None:
     st.subheader("Bodyweight")
     trend = get_bodyweight_trend(conn, date_from, date_to)
-    frame = trends.bodyweight_frame(trend)
+    frame = trends.bodyweight_frame(trend, unit)
     if frame.empty:
         st.info("No bodyweight entries in this range.")
         return
@@ -61,21 +62,25 @@ def _render_bodyweight(conn, date_from: str, date_to: str) -> None:
         ("First", "Last", "Change", "Min", "Max"),
         (trend.first, trend.last, trend.delta, trend.min, trend.max),
     ):
-        col.metric(label, f"{value:g} lb")
+        col.metric(label, f"{to_display_weight(value, unit):g} {unit}")
 
     chart = (
         alt.Chart(frame)
         .mark_line(point=True)
         .encode(
             x=alt.X("date:T", title="Date"),
-            y=alt.Y("weight_lb:Q", title="Bodyweight (lb)", scale=alt.Scale(zero=False)),
-            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("weight_lb:Q", title="lb")],
+            y=alt.Y(
+                "weight_lb:Q",
+                title=f"Bodyweight {trends.weight_label(unit)}",
+                scale=alt.Scale(zero=False),
+            ),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("weight_lb:Q", title=unit)],
         )
     )
     st.altair_chart(chart, width="stretch")
 
 
-def _render_one_rm(conn, date_from: str, date_to: str) -> None:
+def _render_one_rm(conn, date_from: str, date_to: str, unit: str) -> None:
     st.subheader("1RM per lift")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -91,8 +96,12 @@ def _render_one_rm(conn, date_from: str, date_to: str) -> None:
         singles_only = st.checkbox("1RM PRs only (reps = 1)", value=True, key="trends_1rm_singles")
 
     try:
-        e1rm = trends.e1rm_frame(get_e1rm_trend(conn, exercise, date_from, date_to, by=by), by=by)
-        prs = trends.pr_frame(get_prs(conn, exercise, date_from, date_to), singles_only=singles_only)
+        e1rm = trends.e1rm_frame(
+            get_e1rm_trend(conn, exercise, date_from, date_to, by=by), by=by, unit=unit
+        )
+        prs = trends.pr_frame(
+            get_prs(conn, exercise, date_from, date_to), singles_only=singles_only, unit=unit
+        )
     except ExerciseNotFound:
         st.info(f"No data for {exercise}.")
         return
@@ -108,10 +117,14 @@ def _render_one_rm(conn, date_from: str, date_to: str) -> None:
                 .mark_line(point=True)
                 .encode(
                     x=alt.X("x:T", title="Date"),
-                    y=alt.Y("e1rm:Q", title="Weight (lb)", scale=alt.Scale(zero=False)),
+                    y=alt.Y(
+                        "e1rm:Q",
+                        title=f"Weight {trends.weight_label(unit)}",
+                        scale=alt.Scale(zero=False),
+                    ),
                     tooltip=[
                         alt.Tooltip("bucket:N", title="Week"),
-                        alt.Tooltip("e1rm:Q", title="e1RM (lb)"),
+                        alt.Tooltip("e1rm:Q", title=f"e1RM {trends.weight_label(unit)}"),
                         alt.Tooltip("source:N", title="Source set"),
                     ],
                 )
@@ -125,7 +138,7 @@ def _render_one_rm(conn, date_from: str, date_to: str) -> None:
                     y=alt.Y("weight_lb:Q", scale=alt.Scale(zero=False)),
                     tooltip=[
                         alt.Tooltip("date:T"),
-                        alt.Tooltip("weight_lb:Q", title="PR (lb)"),
+                        alt.Tooltip("weight_lb:Q", title=f"PR {trends.weight_label(unit)}"),
                         alt.Tooltip("reps:Q", title="Reps"),
                         alt.Tooltip("context:N", title="Context"),
                     ],
@@ -140,10 +153,14 @@ def _render_one_rm(conn, date_from: str, date_to: str) -> None:
             .mark_line(point=True)
             .encode(
                 x=alt.X("x:N", sort=None, title="Block"),
-                y=alt.Y("e1rm:Q", title="e1RM (lb)", scale=alt.Scale(zero=False)),
+                y=alt.Y(
+                    "e1rm:Q",
+                    title=f"e1RM {trends.weight_label(unit)}",
+                    scale=alt.Scale(zero=False),
+                ),
                 tooltip=[
                     alt.Tooltip("bucket:N", title="Block"),
-                    alt.Tooltip("e1rm:Q", title="e1RM (lb)"),
+                    alt.Tooltip("e1rm:Q", title=f"e1RM {trends.weight_label(unit)}"),
                     alt.Tooltip("source:N", title="Source set"),
                 ],
             )
@@ -189,7 +206,7 @@ def _render_measurements(conn, date_from: str, date_to: str) -> None:
     st.altair_chart(chart, width="stretch")
 
 
-def _render_volume(conn, date_from: str, date_to: str) -> None:
+def _render_volume(conn, date_from: str, date_to: str, unit: str) -> None:
     st.subheader("Volume")
     col1, col2 = st.columns(2)
     with col1:
@@ -206,7 +223,9 @@ def _render_volume(conn, date_from: str, date_to: str) -> None:
         by = st.radio("Bucket", ["week", "block"], horizontal=True, key="trends_vol_by")
 
     try:
-        frame = trends.volume_frame(get_volume_trend(conn, target, date_from, date_to, by=by))
+        frame = trends.volume_frame(
+            get_volume_trend(conn, target, date_from, date_to, by=by), unit=unit
+        )
     except ExerciseNotFound:
         st.info(f"No data for {target}.")
         return
@@ -233,8 +252,8 @@ def _render_volume(conn, date_from: str, date_to: str) -> None:
             .mark_bar()
             .encode(
                 x=alt.X("bucket:N", sort=None, title=bucket_title),
-                y=alt.Y("tonnage_lb:Q", title="Tonnage (lb)"),
-                tooltip=[alt.Tooltip("bucket:N"), alt.Tooltip("tonnage_lb:Q", title="lb")],
+                y=alt.Y("tonnage_lb:Q", title=f"Tonnage {trends.weight_label(unit)}"),
+                tooltip=[alt.Tooltip("bucket:N"), alt.Tooltip("tonnage_lb:Q", title=unit)],
             ),
             width="stretch",
         )

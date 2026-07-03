@@ -98,7 +98,7 @@ def test_out_of_scope_declines_without_interrupt(conn, checkpointer):
 
     result = graph.invoke(_msg("my knee hurts"), THREAD)
     assert "__interrupt__" not in result
-    assert "only record bodyweight and PRs" in _last_ai(result)
+    assert "injuries, measurements" in _last_ai(result)
 
 
 def test_pr_with_unknown_exercise_declines(conn, checkpointer):
@@ -123,3 +123,70 @@ def test_display_unit_kg_in_confirm_prompt(conn, checkpointer):
     )
     # 100 lb -> 45.4 kg at presentation; the stored value stays lb.
     assert "45.4 kg" in result["__interrupt__"][0].value["prompt"]
+
+
+# ---------------------------------------------------------------------------
+# Reviews / form cues via the chat path (Stage 11b)
+# ---------------------------------------------------------------------------
+
+def _reviews_graph(conn, checkpointer, stat_json, fake_embedder, chroma_client):
+    return build_graph(
+        conn,
+        checkpointer=checkpointer,
+        router_model_factory=lambda: StubChatModel('{"intent": "update_stats"}'),
+        chat_model_factory=lambda: RaisingChatModel(),
+        update_stats_llm_factory=lambda: scripted_llm(stat_json),
+        embedder=fake_embedder,
+        chroma_client=chroma_client,
+    )
+
+
+def test_form_cue_confirm_and_embed(conn, checkpointer, fake_embedder, chroma_client):
+    from src.ingest.embed import PERSONAL_NOTES_COLLECTION
+
+    stat = StatUpdate(kind="form_cue", exercise="squat", text="spread the floor").model_dump_json()
+    graph = _reviews_graph(conn, checkpointer, stat, fake_embedder, chroma_client)
+
+    result = graph.invoke(_msg("form cue for squat: spread the floor"), THREAD)
+    assert "form cue" in result["__interrupt__"][0].value["prompt"]
+
+    result = graph.invoke(Command(resume="yes"), THREAD)
+    assert "form cue" in _last_ai(result).lower()
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    metas = collection.get(include=["metadatas"])["metadatas"]
+    assert any(m["doc_type"] == "form_cue" for m in metas)
+
+
+def test_block_review_confirm_writes_sqlite_and_embeds(conn, checkpointer, fake_embedder, chroma_client):
+    from src.ingest.embed import PERSONAL_NOTES_COLLECTION
+
+    stat = StatUpdate(kind="block_review", text="Bench stalled; squat PR'd.").model_dump_json()
+    graph = _reviews_graph(conn, checkpointer, stat, fake_embedder, chroma_client)
+
+    result = graph.invoke(_msg("here's my block review: bench stalled, squat pr'd"), THREAD)
+    assert "review of block" in result["__interrupt__"][0].value["prompt"]
+
+    result = graph.invoke(Command(resume="yes"), THREAD)
+    assert "Saved your review" in _last_ai(result)
+    row = conn.execute(
+        "SELECT review_text FROM block WHERE review_text IS NOT NULL LIMIT 1"
+    ).fetchone()
+    assert row is not None and "Bench stalled" in row["review_text"]
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    metas = collection.get(include=["metadatas"])["metadatas"]
+    assert any(m["doc_type"] == "block_review" for m in metas)
+
+
+def test_block_review_declines_when_no_blocks(checkpointer, fake_embedder, chroma_client):
+    from src.db.connection import get_conn, init_db
+
+    empty = get_conn(":memory:")
+    init_db(empty)
+    try:
+        stat = StatUpdate(kind="block_review", text="nothing to attach to").model_dump_json()
+        graph = _reviews_graph(empty, checkpointer, stat, fake_embedder, chroma_client)
+        result = graph.invoke(_msg("here's my block review"), THREAD)
+        assert "__interrupt__" not in result
+        assert "no block" in _last_ai(result).lower()
+    finally:
+        empty.close()

@@ -84,6 +84,7 @@ def build_graph(
     chroma_client=None,
     embed_prose: bool = True,
     embed_analyses: bool = True,
+    embed_reviews: bool = True,
 ):
     """Compile the agent graph over `conn` (the live training DB connection).
 
@@ -125,7 +126,12 @@ def build_graph(
         ),
     )
     graph.add_node("update_stats_parse", make_update_stats_parse_node(conn, update_stats_llms))
-    graph.add_node("update_stats_confirm", make_update_stats_confirm_node(conn))
+    graph.add_node(
+        "update_stats_confirm",
+        make_update_stats_confirm_node(
+            conn, embedder=embedder, chroma_client=chroma_client, embed_reviews=embed_reviews
+        ),
+    )
     graph.add_node(
         "generate",
         make_generate_node(

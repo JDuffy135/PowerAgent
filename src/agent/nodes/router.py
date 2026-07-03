@@ -26,7 +26,8 @@ Pick exactly one intent:
 - ingest: wants to upload/import a training log or program file
 - analyze: asks about training history, trends, PRs, volume, injuries, or past notes
 - generate: asks you to write/draft a training program or block
-- update_stats: reports one new fact to record (bodyweight, a PR, an injury, a measurement)
+- update_stats: reports one new fact to record (bodyweight, a PR, a block/mesocycle review, a \
+form cue for a lift, an injury, or a measurement)
 - chat: greetings, questions about the assistant, anything else
 
 Respond with ONLY this JSON object, no other text:

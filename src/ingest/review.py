@@ -9,6 +9,7 @@ a `CONFIDENCE_FLAG` marker so the reviewer's eye goes straight to it.
 """
 from __future__ import annotations
 
+from src.agent.units import format_weight
 from src.ingest.models import (
     ParsedBatch,
     ParsedCardio,
@@ -27,16 +28,16 @@ def _flag(confidence: float) -> str:
     return ""
 
 
-def _fmt_weight(weight_lb: float | None) -> str:
+def _fmt_weight(weight_lb: float | None, unit: str = "lb") -> str:
     if weight_lb is None:
         return "BW"  # bodyweight-only / no load recorded
-    if weight_lb == int(weight_lb):
-        return f"{int(weight_lb)} lb"
-    return f"{weight_lb} lb"
+    # Presentation only: `format_weight` converts lb -> the display unit and
+    # trims a trailing `.0`, so committed values stay canonical lb (§2).
+    return format_weight(weight_lb, unit)
 
 
-def _render_set(parsed_set: ParsedSet) -> str:
-    parts = [f"set {parsed_set.set_index}: {_fmt_weight(parsed_set.weight_lb)}"]
+def _render_set(parsed_set: ParsedSet, unit: str = "lb") -> str:
+    parts = [f"set {parsed_set.set_index}: {_fmt_weight(parsed_set.weight_lb, unit)}"]
     if parsed_set.reps is not None:
         parts.append(f"x{parsed_set.reps}")
     if parsed_set.rpe is not None:
@@ -61,10 +62,10 @@ def _render_set(parsed_set: ParsedSet) -> str:
     return line + _flag(parsed_set.confidence)
 
 
-def _render_slot(slot: ParsedProgrammedSlot) -> str:
+def _render_slot(slot: ParsedProgrammedSlot, unit: str = "lb") -> str:
     line = f"{slot.exercise_raw}: {slot.prescription}"
     if slot.target_weight_lb is not None:
-        line += f" (target {_fmt_weight(slot.target_weight_lb)})"
+        line += f" (target {_fmt_weight(slot.target_weight_lb, unit)})"
     if slot.notes:
         line += f" -- {slot.notes}"
     return line + _flag(slot.confidence)
@@ -82,7 +83,7 @@ def _render_cardio(cardio: ParsedCardio) -> str:
     return line + _flag(cardio.confidence)
 
 
-def _render_session(index: int, session: ParsedSession) -> list[str]:
+def _render_session(index: int, session: ParsedSession, unit: str = "lb") -> list[str]:
     header = f"Session {index}: {session.date or '(no date)'}"
     if session.day_label:
         header += f"  [{session.day_label}]"
@@ -99,12 +100,12 @@ def _render_session(index: int, session: ParsedSession) -> list[str]:
             resolved = "resolved" if sets[0].exercise_id is not None else "NEW EXERCISE"
             lines.append(f"    {exercise_raw}  [{resolved}]")
             for parsed_set in sets:
-                lines.append(f"      {_render_set(parsed_set)}")
+                lines.append(f"      {_render_set(parsed_set, unit)}")
 
     if session.programmed_slots:
         lines.append("  Programmed (planned):")
         for slot in session.programmed_slots:
-            lines.append(f"    {_render_slot(slot)}")
+            lines.append(f"    {_render_slot(slot, unit)}")
 
     if session.cardio:
         lines.append("  Cardio:")
@@ -114,12 +115,15 @@ def _render_session(index: int, session: ParsedSession) -> list[str]:
     return lines
 
 
-def render_batch(parsed: ParsedBatch) -> str:
+def render_batch(parsed: ParsedBatch, unit: str = "lb") -> str:
     """Render a `ParsedBatch` as a readable review summary.
 
     Sessions -> exercises -> sets, plus cardio, programmed slots, and any
     new-exercise candidates. Every field with `confidence < 1.0` is flagged so
     the reviewer can focus corrections there.
+
+    `unit` ('lb' | 'kg') is presentation only: weights are converted for display
+    while the committed values stay canonical lb (§2).
     """
     lines: list[str] = ["=== Ingest review ==="]
 
@@ -131,7 +135,7 @@ def render_batch(parsed: ParsedBatch) -> str:
     if not parsed.sessions:
         lines.append("(no sessions parsed)")
     for i, session in enumerate(parsed.sessions, start=1):
-        lines.extend(_render_session(i, session))
+        lines.extend(_render_session(i, session, unit))
         lines.append("")
 
     if parsed.new_exercise_candidates:

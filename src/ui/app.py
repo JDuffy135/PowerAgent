@@ -48,6 +48,9 @@ def _resources():
 
 
 conn, graph = _resources()
+# Presentation unit from config (§2): the chat flow reads it via `make_input`;
+# the read-only tabs take it as a parameter. Storage is always canonical lb.
+display_unit = load_config().get("display_unit", "lb")
 
 st.title("🏋️ Powerlifting Coach")
 
@@ -57,10 +60,10 @@ tab_chat, tab_trends, tab_organizer, tab_backfill, tab_dev = st.tabs(
 with tab_chat:
     chat_tab.render(conn, graph)
 with tab_trends:
-    trends_tab.render(conn)
+    trends_tab.render(conn, display_unit)
 with tab_organizer:
     organizer_tab.render(conn)
 with tab_backfill:
-    backfill_tab.render(conn)
+    backfill_tab.render(conn, display_unit)
 with tab_dev:
     devtools_tab.render(conn)

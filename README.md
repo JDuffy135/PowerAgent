@@ -77,6 +77,10 @@ the coach figures out what you want:
 - **Report a stat** — "bodyweight 146 this morning", "hit a 405x1 deadlift PR".
   It shows you what it's about to record and waits for your **yes/no** before
   writing.
+- **Record a review or a cue** — "here's my review of the last block: …" or
+  "form cue for squat: spread the floor". Block reviews are saved to the block
+  and embedded so the coach can recall them when it writes your next program;
+  form cues are embedded against the lift. Same yes/no confirm before saving.
 - **Ask for a program** — "write me a 4-week strength block based on this prep".
   It studies your history and drafts a full block; you review it and choose to
   save it as a draft (drafts stay out of analysis until you start them) or
@@ -116,7 +120,8 @@ coach knows, filtered by a shared date range (defaults to the last 6 months):
   group or a single exercise.
 
 Draft programs never pollute these charts — only training you actually logged
-counts.
+counts. Weights follow your `display_unit` setting (lb or kg); measurements stay
+in inches.
 
 ### 🗂️ Organizer
 
@@ -128,6 +133,9 @@ perfect at ingest time never matters:
   block back together, or move a block to another program).
 - **Start a draft** — flip a program the coach drafted from `draft` to active
   (with a start date) so its sessions start counting in your analysis.
+- **Write reviews** — a block/mesocycle review or a macrocycle review per
+  program. Saving writes the prose to your training DB *and* embeds it, so the
+  coach can cite past reviews when it drafts your next block.
 
 Every action is a single button; the tables above show live counts so you can
 see what you're working with.
@@ -180,7 +188,10 @@ nodes:
 - To run **fully offline**, set `generate.provider: local` (and give it a local
   model + host). An API key is **never required** while every node is `local`.
 - `display_unit: lb` — weights are stored canonically in pounds and only
-  converted for display. Set to `kg` to show kilos.
+  converted for display. Set to `kg` to show kilos everywhere the app renders a
+  weight (chat answers, HITL review/confirm prompts, generated drafts, the
+  Trends charts, backfill review). The Dev Tools grid stays in lb — it edits the
+  canonical stored values directly.
 - `db_path`, `chroma_path`, `checkpoints_db` — where your data lives.
 
 ---
@@ -194,8 +205,10 @@ python -m src.cli
 ```
 
 `/ingest <path>` stages a training log for review; `/learn <path> [--topic ...]`
-adds reference material; anything else is chat. The review round-trip works the
-same way — approve, reject, or type corrections.
+adds reference material; `/reembed` rebuilds the vector store with the currently
+configured embedder (run it after changing the embedding model in
+`config.yaml`); anything else is chat. The review round-trip works the same way
+— approve, reject, or type corrections.
 
 ---
 
@@ -233,7 +246,7 @@ full picture.
 ## Development
 
 ```bash
-pytest        # 253 tests, in-memory SQLite seeded per test, no live models
+pytest        # 278 tests, in-memory SQLite seeded per test, no live models
 ```
 
 Project layout:
@@ -248,6 +261,8 @@ Project layout:
 | `src/cli.py` | Terminal REPL |
 | `tests/` | Full suite; stubs/fakes for every model dependency |
 
-**Remaining optional polish** (see [`IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)
-Stage 11): a full `display_unit: kg` pass through the UI, block-review /
-form-cue embedding paths, and a re-embedding command for swapping embedders.
+All ten build stages are complete (see
+[`IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)), including the Stage 11
+polish: a full `display_unit: kg` pass through every rendered surface,
+block-review / form-cue embedding from both the Organizer and chat, and a
+`/reembed` command for swapping embedders.

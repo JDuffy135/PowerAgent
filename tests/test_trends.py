@@ -117,3 +117,56 @@ def test_volume_frame_muscle_group_and_exercise(conn):
     assert not group_frame.empty and not exercise_frame.empty
     # A muscle group aggregates at least as much as any single exercise in it.
     assert group_frame["hard_sets"].sum() >= exercise_frame["hard_sets"].sum()
+
+
+# ---------------------------------------------------------------------------
+# display_unit (Stage 11a) -- weight columns hold converted values; lb canonical
+# ---------------------------------------------------------------------------
+
+def _approx(a, b):
+    return abs(a - b) < 0.05
+
+
+def test_bodyweight_frame_converts_to_kg(conn):
+    trend = get_bodyweight_trend(conn, *RANGE)
+    lb = trends.bodyweight_frame(trend)
+    kg = trends.bodyweight_frame(trend, unit="kg")
+    assert not lb.empty
+    for lb_val, kg_val in zip(lb["weight_lb"], kg["weight_lb"]):
+        assert _approx(kg_val, lb_val * 0.45359237)
+
+
+def test_e1rm_frame_converts_to_kg(conn):
+    exercise = trends.list_exercises(conn)[0]
+    points = get_e1rm_trend(conn, exercise, *RANGE, by="week")
+    lb = trends.e1rm_frame(points, by="week")
+    kg = trends.e1rm_frame(points, by="week", unit="kg")
+    for lb_val, kg_val in zip(lb["e1rm"], kg["e1rm"]):
+        assert _approx(kg_val, lb_val * 0.45359237)
+    # The source tooltip carries the display unit too.
+    if not kg.empty:
+        assert "kg" in kg["source"].iloc[0]
+
+
+def test_pr_frame_converts_to_kg(conn):
+    prs = get_prs(conn, None, *RANGE)
+    lb = trends.pr_frame(prs, singles_only=False)
+    kg = trends.pr_frame(prs, singles_only=False, unit="kg")
+    for lb_val, kg_val in zip(lb["weight_lb"], kg["weight_lb"]):
+        assert _approx(kg_val, lb_val * 0.45359237)
+
+
+def test_volume_frame_converts_tonnage_only(conn):
+    exercise = trends.list_exercises(conn)[0]
+    points = get_volume_trend(conn, exercise, *RANGE, by="week")
+    lb = trends.volume_frame(points)
+    kg = trends.volume_frame(points, unit="kg")
+    # hard_sets is a count -- never converted; tonnage_lb is a weight.
+    assert list(lb["hard_sets"]) == list(kg["hard_sets"])
+    for lb_val, kg_val in zip(lb["tonnage_lb"], kg["tonnage_lb"]):
+        assert _approx(kg_val, lb_val * 0.45359237)
+
+
+def test_weight_label():
+    assert trends.weight_label("kg") == "(kg)"
+    assert trends.weight_label("lb") == "(lb)"

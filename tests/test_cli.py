@@ -74,3 +74,27 @@ def test_run_learn_missing_path_prints_usage():
     written = []
     run_learn("/learn", write=written.append)
     assert any("usage" in line for line in written)
+
+
+# ---------------------------------------------------------------------------
+# /reembed command (Stage 11c)
+# ---------------------------------------------------------------------------
+
+def test_run_reembed_reports_counts(fake_embedder, chroma_client, monkeypatch):
+    import src.ingest.reembed as reembed_mod
+    from src.cli import run_reembed
+    from src.ingest.embed import PERSONAL_NOTES_COLLECTION
+
+    col = chroma_client.get_or_create_collection(PERSONAL_NOTES_COLLECTION)
+    col.add(ids=["x"], documents=["squat day"], embeddings=[[0.0] * 8],
+            metadatas=[{"doc_type": "session_note"}])
+
+    # Route the real seams to the in-memory fakes -- no live Ollama/Chroma.
+    monkeypatch.setattr(reembed_mod, "get_embedder", lambda: fake_embedder)
+    monkeypatch.setattr(reembed_mod, "get_chroma_client", lambda: chroma_client)
+    monkeypatch.setattr(reembed_mod, "embedder_name", lambda: "fake-model")
+
+    written: list[str] = []
+    run_reembed(write=written.append)
+    assert any("re-embedded" in line for line in written)
+    assert any("done" in line for line in written)

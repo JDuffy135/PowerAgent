@@ -121,3 +121,50 @@ def test_new_exercise_candidates_rendered_and_flagged():
     assert "Bulgarian Split Squats" in out
     assert "New exercise candidates" in out
     assert CONFIDENCE_FLAG in out
+
+
+# ---------------------------------------------------------------------------
+# display_unit (Stage 11a) -- kg is presentation-only; lb stays canonical
+# ---------------------------------------------------------------------------
+
+def _one_set_batch() -> ParsedBatch:
+    return ParsedBatch(
+        sessions=[
+            ParsedSession(
+                date="2026-07-01",
+                raw_note="squat",
+                sets=[
+                    ParsedSet(
+                        exercise_raw="Squat",
+                        exercise_id=2,
+                        set_index=1,
+                        weight_lb=225.0,
+                        reps=5,
+                        raw_text="225x5",
+                    )
+                ],
+                programmed_slots=[
+                    ParsedProgrammedSlot(
+                        exercise_raw="Squat",
+                        prescription="1x1 @ RPE 8",
+                        target_weight_lb=315.0,
+                    )
+                ],
+            )
+        ]
+    )
+
+
+def test_render_default_unit_is_lb():
+    out = render_batch(_one_set_batch())
+    assert "225 lb" in out
+    assert "315 lb" in out
+    assert "kg" not in out
+
+
+def test_render_kg_converts_sets_and_slots():
+    out = render_batch(_one_set_batch(), unit="kg")
+    # 225 lb -> 102.1 kg, 315 lb -> 142.9 kg (presentation only).
+    assert "102.1 kg" in out
+    assert "142.9 kg" in out
+    assert "lb" not in out

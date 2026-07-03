@@ -87,3 +87,70 @@ def test_get_embedder_returns_callable_for_local(monkeypatch):
 
     monkeypatch.setattr(embed_mod, "_node_config", lambda node: {"provider": "local"})
     assert callable(get_embedder())
+
+
+# ---------------------------------------------------------------------------
+# embed_review (Stage 11b) -- block/program reviews + form cues
+# ---------------------------------------------------------------------------
+
+def test_embed_review_writes_block_review(fake_embedder, chroma_client):
+    from src.ingest.embed import BLOCK_REVIEW_DOC_TYPE, block_review_id, embed_review
+
+    doc_id = embed_review(
+        "Great strength block; deadlift moved well.",
+        block_review_id(5),
+        BLOCK_REVIEW_DOC_TYPE,
+        date="2026-06-30",
+        block_id=5,
+        program_id=2,
+        embedder=fake_embedder,
+        client=chroma_client,
+    )
+    assert doc_id == "block_review_5"
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    got = collection.get(ids=["block_review_5"], include=["metadatas", "documents"])
+    meta = got["metadatas"][0]
+    assert meta["doc_type"] == "block_review"
+    assert meta["block_id"] == 5 and meta["program_id"] == 2
+    assert meta["date"] == "2026-06-30" and meta["session_id"] == 0
+
+
+def test_embed_review_upsert_is_idempotent(fake_embedder, chroma_client):
+    from src.ingest.embed import BLOCK_REVIEW_DOC_TYPE, block_review_id, embed_review
+
+    for text in ("first draft", "edited review"):
+        embed_review(text, block_review_id(9), BLOCK_REVIEW_DOC_TYPE,
+                     embedder=fake_embedder, client=chroma_client)
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    assert collection.count() == 1
+    got = collection.get(ids=["block_review_9"], include=["documents"])
+    assert got["documents"][0] == "edited review"
+
+
+def test_embed_review_blank_deletes(fake_embedder, chroma_client):
+    from src.ingest.embed import BLOCK_REVIEW_DOC_TYPE, block_review_id, embed_review
+
+    embed_review("something", block_review_id(1), BLOCK_REVIEW_DOC_TYPE,
+                 embedder=fake_embedder, client=chroma_client)
+    result = embed_review("   ", block_review_id(1), BLOCK_REVIEW_DOC_TYPE,
+                          embedder=fake_embedder, client=chroma_client)
+    assert result is None
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    assert collection.count() == 0
+
+
+def test_embed_review_form_cue_carries_exercises(fake_embedder, chroma_client):
+    from src.ingest.embed import FORM_CUE_DOC_TYPE, embed_review
+
+    embed_review(
+        "spread the floor, knees out",
+        "form_cue_2_123",
+        FORM_CUE_DOC_TYPE,
+        exercises=["Low Bar Squat"],
+        embedder=fake_embedder,
+        client=chroma_client,
+    )
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    meta = collection.get(ids=["form_cue_2_123"], include=["metadatas"])["metadatas"][0]
+    assert meta["doc_type"] == "form_cue"
+    assert meta["exercises"] == "Low Bar Squat"

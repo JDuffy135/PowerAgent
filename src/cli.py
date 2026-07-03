@@ -33,6 +33,8 @@ Commands:
   /learn <path> [--topic T] [--title ...] [--author ...] [--year Y] [--source ...]
                    add reference material (study/article/PDF) to the knowledge
                    base -- no review; the LLM guesses any metadata you omit
+  /reembed         rebuild every Chroma collection with the configured embedder
+                   (run after changing the embedding model in config.yaml)
   exit | quit      leave
 Anything else is routed by intent: ask about your history ("best bench in
 March?"), report a stat ("bodyweight 146 today", "hit a 405x1 deadlift PR"),
@@ -106,10 +108,29 @@ def run_learn(line: str, *, llm=_UNSET, embedder=None, chroma_client=None, write
     write(f"coach> learned {path} ({n} chunk{'s' if n != 1 else ''} embedded into the knowledge base).")
 
 
+def run_reembed(write=print) -> None:
+    """Handle `/reembed`: rebuild every Chroma collection with the configured
+    embedder. Best-effort -- a dead Ollama/Chroma surfaces as a message, not a
+    crash."""
+    from src.ingest.reembed import reembed_all
+
+    write("coach> re-embedding collections (this can take a while)...")
+    try:
+        counts = reembed_all(write=write)
+    except Exception as exc:  # embedder/store failure shouldn't kill the REPL
+        write(f"coach> re-embed failed: {exc}")
+        return
+    total = sum(counts.values())
+    write(f"coach> done -- {total} document(s) re-embedded across {len(counts)} collection(s).")
+
+
 def make_input(line: str) -> dict:
     """Turn one REPL line into graph input. `/ingest <path>` presets the intent
     so the router is skipped; everything else goes through classification."""
     # Reset per-turn scratch so nothing leaks across turns on the persistent thread.
+    # `display_unit` comes from config so every presentation surface (HITL review
+    # rendering, stat/draft confirmations) shows the user's chosen unit; storage
+    # stays canonical lb (§2).
     fresh = {
         "review_decision": None,
         "review_note": None,
@@ -119,6 +140,7 @@ def make_input(line: str) -> dict:
         "offer_store": False,
         "pending_stat": None,
         "pending_draft": None,
+        "display_unit": load_config().get("display_unit", "lb"),
     }
     if line.startswith("/ingest"):
         path = line[len("/ingest"):].strip() or None
@@ -190,6 +212,9 @@ def main() -> None:
             break
         if line.startswith("/learn"):
             run_learn(line)
+            continue
+        if line.lower() == "/reembed":
+            run_reembed()
             continue
         run_turn(graph, config, make_input(line))
 

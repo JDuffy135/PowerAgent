@@ -13,6 +13,8 @@ import streamlit as st
 
 from src.tools.organize import (
     OrganizeError,
+    get_block_review,
+    get_program_review,
     list_blocks,
     list_programs,
     list_sessions,
@@ -22,6 +24,8 @@ from src.tools.organize import (
     reattach_session,
     rename_block,
     rename_program,
+    set_block_review,
+    set_program_review,
     start_draft,
 )
 
@@ -36,12 +40,58 @@ def _run(action, success: str) -> None:
         st.rerun()
 
 
+def _save_review(save, target: str) -> None:
+    """Run a review save (SQLite write + Chroma embed). The prose is committed
+    before embedding, so an embed failure (e.g. Ollama down) is a warning, not a
+    loss."""
+    try:
+        save()
+    except OrganizeError as exc:
+        st.error(str(exc))
+    except Exception as exc:  # embedder/Chroma failure -- prose is already saved
+        st.warning(f"Saved {target} review to the database, but embedding failed: {exc}")
+    else:
+        st.success(f"Saved {target} review.")
+        st.rerun()
+
+
 def _program_label(p) -> str:
     return f"#{p.program_id} {p.name} ({p.status})"
 
 
 def _block_label(b) -> str:
     return f"#{b.block_id} {b.name} — {b.program_name}"
+
+
+def _review_section(conn, programs, blocks) -> None:
+    """Text areas to write a block/program review; saving embeds it for retrieval
+    (the coach can cite past reviews when it writes new programs)."""
+    st.subheader("Reviews")
+    st.caption(
+        "Block and macrocycle reviews are saved to the training DB *and* embedded "
+        "so the coach can recall them (e.g. when drafting your next block)."
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        if blocks:
+            block = st.selectbox("Block", blocks, format_func=_block_label, key="review_block_pick")
+            current = get_block_review(conn, block.block_id) or ""
+            text = st.text_area("Block review", value=current, key=f"review_block_{block.block_id}",
+                                height=160, placeholder="How did this block go? What worked / didn't?")
+            if st.button("Save block review"):
+                _save_review(lambda: set_block_review(conn, block.block_id, text), "block")
+        else:
+            st.info("No blocks to review yet.")
+    with col2:
+        if programs:
+            program = st.selectbox("Program", programs, format_func=_program_label, key="review_prog_pick")
+            current = get_program_review(conn, program.program_id) or ""
+            text = st.text_area("Macrocycle review", value=current, key=f"review_prog_{program.program_id}",
+                                height=160, placeholder="Overall review of this program / prep.")
+            if st.button("Save program review"):
+                _save_review(lambda: set_program_review(conn, program.program_id, text), "program")
+        else:
+            st.info("No programs to review yet.")
 
 
 def render(conn) -> None:
@@ -122,6 +172,9 @@ def render(conn) -> None:
                              f"Merged #{src.block_id} into #{dst.block_id}.")
     else:
         st.info("No blocks yet.")
+
+    # -------------------------------------------------------------- reviews
+    _review_section(conn, programs, blocks)
 
     # ------------------------------------------------------------- sessions
     st.subheader("Sessions")

@@ -189,3 +189,64 @@ def test_start_draft_flips_status_and_stamps_date(conn):
 def test_start_draft_rejects_non_draft(conn):
     with pytest.raises(OrganizeError):
         start_draft(conn, _program_id(conn), "2026-07-06")
+
+
+# ---------------------------------------------------------------------------
+# Reviews (Stage 11b) -- SQLite write + Chroma embed, idempotent + clearable
+# ---------------------------------------------------------------------------
+
+def test_set_block_review_writes_sqlite_and_embeds(conn, fake_embedder, chroma_client):
+    from src.ingest.embed import PERSONAL_NOTES_COLLECTION
+    from src.tools.organize import get_block_review, set_block_review
+
+    block_id = _block_ids(conn)[0]
+    doc_id = set_block_review(
+        conn, block_id, "Solid block, bench lagged.",
+        embedder=fake_embedder, chroma_client=chroma_client,
+    )
+    assert doc_id == f"block_review_{block_id}"
+    assert get_block_review(conn, block_id) == "Solid block, bench lagged."
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    meta = collection.get(ids=[doc_id], include=["metadatas"])["metadatas"][0]
+    assert meta["doc_type"] == "block_review" and meta["block_id"] == block_id
+
+
+def test_set_block_review_blank_clears_and_unembeds(conn, fake_embedder, chroma_client):
+    from src.ingest.embed import PERSONAL_NOTES_COLLECTION
+    from src.tools.organize import get_block_review, set_block_review
+
+    block_id = _block_ids(conn)[0]
+    set_block_review(conn, block_id, "temp", embedder=fake_embedder, chroma_client=chroma_client)
+    result = set_block_review(conn, block_id, "  ", embedder=fake_embedder, chroma_client=chroma_client)
+    assert result is None
+    assert get_block_review(conn, block_id) is None
+    collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+    assert collection.count() == 0
+
+
+def test_set_program_review_embeds(conn, fake_embedder, chroma_client):
+    from src.tools.organize import get_program_review, set_program_review
+
+    program_id = _program_id(conn)
+    doc_id = set_program_review(
+        conn, program_id, "Great prep overall.",
+        embedder=fake_embedder, chroma_client=chroma_client,
+    )
+    assert doc_id == f"program_review_{program_id}"
+    assert get_program_review(conn, program_id) == "Great prep overall."
+
+
+def test_set_block_review_embed_false_skips_chroma(conn):
+    from src.tools.organize import get_block_review, set_block_review
+
+    block_id = _block_ids(conn)[0]
+    result = set_block_review(conn, block_id, "no embed", embed=False)
+    assert result is None
+    assert get_block_review(conn, block_id) == "no embed"
+
+
+def test_set_block_review_unknown_id_raises(conn):
+    from src.tools.organize import set_block_review
+
+    with pytest.raises(OrganizeError):
+        set_block_review(conn, 99999, "x", embed=False)

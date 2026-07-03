@@ -107,7 +107,7 @@ def _run_section(conn) -> None:
             st.success(f"All {len(results)} chunk(s) {'committed' if auto_commit else 'staged'}.")
 
 
-def _pending_section(conn) -> None:
+def _pending_section(conn, display_unit: str = "lb") -> None:
     pending = list_batches(conn, status="pending_review")
     st.subheader(f"Pending batches ({len(pending)})")
     if not pending:
@@ -125,7 +125,7 @@ def _pending_section(conn) -> None:
         )
         with st.expander(header):
             try:
-                st.text(render_batch(get_pending_batch(conn, batch.batch_id)))
+                st.text(render_batch(get_pending_batch(conn, batch.batch_id), display_unit))
             except Exception as exc:
                 st.error(f"Could not render batch: {exc}")
                 continue
@@ -149,8 +149,8 @@ def _pending_section(conn) -> None:
                 st.rerun()
 
 
-def render(conn) -> None:
+def render(conn, display_unit: str = "lb") -> None:
     st.subheader("Backfill an archive")
     _run_section(conn)
     st.divider()
-    _pending_section(conn)
+    _pending_section(conn, display_unit)
