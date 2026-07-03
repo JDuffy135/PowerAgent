@@ -30,3 +30,19 @@ nodes:
     provider: local
     model: qwen3:14b
     host: http://localhost:11434
+  # ANALYZE + SYNTHESIZE run the deeper-reasoning MoE (ARCHITECTURE.md §6.2).
+  # [DECISION] Qwen3.6 35B-A3B; step down to qwen3:14b if latency bottlenecks.
+  # Cloud-flippable in Stage 7 (change provider -> cloud).
+  analyze:
+    provider: local
+    model: qwen3.6:35b-a3b
+    host: http://localhost:11434
+  synthesize:
+    provider: local
+    model: qwen3.6:35b-a3b
+    host: http://localhost:11434
+  # UPDATE_STATS stays on the 14B workhorse (structured single-fact parse).
+  update_stats:
+    provider: local
+    model: qwen3:14b
+    host: http://localhost:11434

@@ -17,6 +17,7 @@ Ollama server or on-disk store is required.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -32,6 +33,7 @@ DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_CHROMA_PATH = Path(__file__).parent.parent.parent / "data" / "chroma"
 
 PERSONAL_NOTES_COLLECTION = "personal_notes"
+ANALYSIS_DOC_TYPE = "analysis"  # SYNTHESIZE output stored via the "store this analysis?" offer
 
 # A list of texts in, one embedding vector per text out.
 Embedder = Callable[[Sequence[str]], list[list[float]]]
@@ -165,3 +167,44 @@ def embed_session_notes(
         metadatas=metadatas,
     )
     return len(records)
+
+
+def embed_analysis(
+    text: str,
+    date: str | None = None,
+    embedder: Embedder | None = None,
+    client=None,
+    collection_name: str = PERSONAL_NOTES_COLLECTION,
+) -> str | None:
+    """Embed one SYNTHESIZE analysis into `personal_notes` under `doc_type='analysis'`.
+
+    Unlike session notes, an analysis isn't tied to a logged session, so it gets a
+    unique time-based id (`analysis_<ms>`) and `session_id=0`. Returns the id, or
+    None if `text` is blank. Reuses the same embedder/client seams as everything
+    else so tests inject a fake embedder + in-memory client.
+    """
+    if not text or not text.strip():
+        return None
+
+    if embedder is None:
+        embedder = get_embedder()
+    if client is None:
+        client = get_chroma_client()
+
+    collection = client.get_or_create_collection(collection_name)
+
+    doc_id = f"analysis_{int(time.time() * 1000)}"
+    metadata = {
+        "date": date or "",
+        "date_ordinal": int(date.replace("-", "")) if date else 0,
+        "session_id": 0,
+        "doc_type": ANALYSIS_DOC_TYPE,
+        "exercises": "",
+    }
+    collection.upsert(
+        ids=[doc_id],
+        documents=[text],
+        embeddings=[embedder([text])[0]],
+        metadatas=[metadata],
+    )
+    return doc_id

@@ -32,8 +32,41 @@ class StubChatModel:
 class RaisingChatModel:
     """Fails the test if any node actually invokes it."""
 
+    def bind_tools(self, tools):
+        return self
+
     def invoke(self, messages):
         raise AssertionError("chat model should not have been called")
+
+
+def tool_call_message(name: str, args: dict, call_id: str = "call_1") -> AIMessage:
+    """An AIMessage that requests one tool call, shaped like ChatOllama's output."""
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+    )
+
+
+class ToolCallingStubModel:
+    """Scripted tool-calling chat model for the ANALYZE ReAct loop.
+
+    `bind_tools` records the toolset and returns self; `invoke` replays canned
+    AIMessages in order (build tool-call ones with `tool_call_message`, and a
+    plain `AIMessage("done")` to end the loop). Records every message list it saw.
+    """
+
+    def __init__(self, *responses: AIMessage):
+        self.responses = list(responses)
+        self.calls: list = []
+        self.bound_tools = None
+
+    def bind_tools(self, tools):
+        self.bound_tools = tools
+        return self
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        return self.responses.pop(0)
 
 
 def scripted_llm(*responses: str):

@@ -29,45 +29,64 @@ BANNER = """Powerlifting Coach -- CLI REPL
 Commands:
   /ingest <path>   ingest a training log file (HITL review before commit)
   exit | quit      leave
-Anything else is routed by intent (analyze/generate/update_stats land in Stages 6-7).
+Anything else is routed by intent: ask about your history ("best bench in
+March?"), report a stat ("bodyweight 146 today", "hit a 405x1 deadlift PR"),
+or just chat. Program generation lands in Stage 7.
 """
 
 
 def make_input(line: str) -> dict:
     """Turn one REPL line into graph input. `/ingest <path>` presets the intent
     so the router is skipped; everything else goes through classification."""
+    # Reset per-turn scratch so nothing leaks across turns on the persistent thread.
+    fresh = {
+        "review_decision": None,
+        "review_note": None,
+        "evidence": [],
+        "evidence_truncated": False,
+        "analysis_text": None,
+        "offer_store": False,
+        "pending_stat": None,
+    }
     if line.startswith("/ingest"):
         path = line[len("/ingest"):].strip() or None
         return {
             "messages": [HumanMessage(content=line)],
             "intent": "ingest",
             "file_path": path,
-            "review_decision": None,
-            "review_note": None,
+            **fresh,
         }
     return {
         "messages": [HumanMessage(content=line)],
         "intent": None,
         "file_path": None,
-        "review_decision": None,
-        "review_note": None,
+        **fresh,
     }
 
 
 def run_turn(graph, config: dict, graph_input, read_input=input, write=print) -> None:
-    """One user turn: invoke, then service any interrupt round-trips until the
-    graph reaches END, and print the final assistant message."""
+    """One user turn: invoke, print any new assistant messages, then service each
+    interrupt round-trip until the graph reaches END.
+
+    New AIMessages are printed as they appear (tracked by index into the running
+    `messages` list) *before* prompting on an interrupt -- so, e.g., SYNTHESIZE's
+    analysis shows up right before the "store this?" question, not swallowed by it.
+    """
+    printed = 0
     result = graph.invoke(graph_input, config)
-    while "__interrupt__" in result:
+    while True:
+        messages = result.get("messages", [])
+        for message in messages[printed:]:
+            if isinstance(message, AIMessage) and message.content:
+                write(f"coach> {message.content}")
+        printed = len(messages)
+
+        if "__interrupt__" not in result:
+            return
         payload = result["__interrupt__"][0].value
         write(payload.get("prompt", str(payload)) if isinstance(payload, dict) else str(payload))
         reply = read_input("review> ")
         result = graph.invoke(Command(resume=reply), config)
-
-    for message in reversed(result.get("messages", [])):
-        if isinstance(message, AIMessage):
-            write(f"coach> {message.content}")
-            return
 
 
 def main() -> None:

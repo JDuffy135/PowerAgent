@@ -1,15 +1,17 @@
-# Powerlifting Coach — Data Foundation + Ingestion + Tools + LangGraph Core (Steps 1–5)
+# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph (Steps 1–6)
 
 SQLite schema, exercise resolver, seed data, and four typed query tools
 (Step 1); the LLM extraction pipeline that turns raw log text into a
 schema-validated `ParsedBatch` (Step 2); the HITL staging + transactional
 commit path plus Chroma prose embedding (Step 3); the rest of the typed
 query tools plus Chroma semantic search and a gated read-only SQL escape hatch
-(Step 4); and the LangGraph agent core — router, INGEST pipeline with
+(Step 4); the LangGraph agent core — router, INGEST pipeline with
 interrupt-based HITL review (corrections + block assignment), SqliteSaver
-checkpointing, and a minimal CLI REPL (Step 5). See `ARCHITECTURE.md` for the
-full design and `HANDOFF_STEP_5.md` for the latest handoff. ANALYZE / GENERATE
-/ UPDATE_STATS are placeholder nodes until Stages 6–7.
+checkpointing, and a minimal CLI REPL (Step 5); and the ANALYZE ReAct loop,
+SYNTHESIZE answer-writer (with unit conversion + a "store this analysis?"
+offer), and UPDATE_STATS confirm-before-write path (Step 6). See
+`ARCHITECTURE.md` for the full design and `HANDOFF_STEP_6.md` for the latest
+handoff. GENERATE (program writer) + the cloud provider branch land in Stage 7.
 
 ## Setup
 
@@ -214,6 +216,45 @@ Key modules: `src/agent/llm_provider.py` (per-node model routing —
 `src/cli.py`. All graph paths are covered by stub-LLM tests
 (`tests/agent/`) — no live model needed for the suite.
 
+## ANALYZE + SYNTHESIZE + UPDATE_STATS (Step 6)
+
+Plain questions and stat reports are now handled end-to-end in the same REPL:
+
+```text
+you> what was my best bench in March?
+coach> Your best March bench was 230 lb x1 on 2026-03-19.
+Store this analysis to your notes for future reference? (yes/no)
+review> no
+
+you> bodyweight was 146 this morning
+Record this? bodyweight 146 lb on 2026-07-02. Reply `yes` to save or `no` to discard.
+review> yes
+coach> Recorded bodyweight 146 lb on 2026-07-02.
+```
+
+- **ANALYZE** (`src/agent/nodes/analyze.py`) is a bounded ReAct loop
+  (`MAX_TOOL_CALLS = 8`) over the Step 1/4 query tools, wrapped as LangChain
+  tools in `src/agent/tools.py` (tight, enum/date-typed schemas;
+  `ExerciseNotFound` returned as `{"error": ...}` so the model can recover). It
+  accumulates structured `evidence`; the ReAct scratch (tool calls/results)
+  stays local to the node so the durable message history stays clean. Hitting
+  the cap sets `evidence_truncated`.
+- **SYNTHESIZE** (`src/agent/nodes/synthesize.py`) composes the final answer
+  from `evidence`. It is the **only** place weights are converted from canonical
+  lb to the user's `display_unit` (`src/agent/units.py`). On overflow it appends
+  a fixed disclaimer that asks the user to narrow scope. It then offers to store
+  the analysis; on `yes` the text is embedded into Chroma `personal_notes` under
+  `doc_type='analysis'` (`embed_analysis`).
+- **UPDATE_STATS** (`src/agent/nodes/update_stats.py`) parses one reported
+  bodyweight or PR (weight normalized to lb), then confirms before writing via
+  `interrupt()`; the durable inserts live in `src/tools/stats.py`. Unknown PR
+  exercises and out-of-scope reports (injuries/measurements) are declined
+  without an interrupt.
+
+All of it is covered by scripted-stub tests (`tests/agent/test_graph_analyze.py`,
+`test_graph_update_stats.py`, `test_units.py`, `tests/test_stats.py`) — the
+tool-calling stub drives real tools against the seeded DB, no live model.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
@@ -222,11 +263,13 @@ Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`
 `src/ingest/review.py`, `src/ingest/commit.py`, `src/ingest/embed.py` (Step 3);
 the rest of `src/tools/queries.py`, `src/tools/vector.py`, `src/tools/sql.py`
 (Step 4); `src/agent/` (graph, router, INGEST HITL flow, provider),
-`src/ingest/correct.py`, `src/cli.py` (Step 5); full pytest coverage
-throughout (141 tests).
+`src/ingest/correct.py`, `src/cli.py` (Step 5); the ANALYZE ReAct loop
+(`src/agent/nodes/analyze.py`, `src/agent/tools.py`), SYNTHESIZE +
+"store this analysis?" (`src/agent/nodes/synthesize.py`, `src/agent/units.py`,
+`embed_analysis`), and UPDATE_STATS (`src/agent/nodes/update_stats.py`,
+`src/tools/stats.py`) (Step 6); full pytest coverage throughout (161 tests).
 
 Explicitly not implemented (future steps per `ARCHITECTURE.md` /
-`IMPLEMENTATION_ROADMAP.md`): ANALYZE ReAct loop, SYNTHESIZE, UPDATE_STATS
-(placeholder nodes reply "not implemented yet"), program generation (GENERATE),
-cloud provider branch, xlsx/pdf loading, `search_knowledge`/knowledge-base
-ingestion, Streamlit/Gradio UI.
+`IMPLEMENTATION_ROADMAP.md`): program generation (GENERATE — still a placeholder
+node that replies "not implemented yet"), cloud provider branch, xlsx/pdf
+loading, `search_knowledge`/knowledge-base ingestion, Streamlit/Gradio UI.

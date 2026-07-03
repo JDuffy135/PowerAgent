@@ -34,7 +34,7 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_5.md` (which superseded the Step 4 handoff) for current state,
+`HANDOFF_STEP_6.md` (the current handoff) for current state,
 and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
@@ -109,7 +109,8 @@ the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
 
 **Status:** implemented. 141 tests passing (107 prior + 34 new). See
-`HANDOFF_STEP_5.md` for the full writeup and the "LangGraph agent core + CLI"
+`HANDOFF_STEP_6.md` (the current handoff) for the full writeup and the
+"LangGraph agent core + CLI"
 section of `README.md` for usage. All five open decisions resolved — see the
 "Decisions" section below, now recording the final calls.
 
@@ -181,12 +182,17 @@ Create `src/agent/` per ARCHITECTURE.md §4 and §7:
 
 ---
 
-## Stage 6 — ANALYZE ReAct loop + SYNTHESIZE + UPDATE_STATS
+## Stage 6 — ANALYZE ReAct loop + SYNTHESIZE + UPDATE_STATS ✅ DONE (2026-07-02)
 
 **Minimum effective model: opus + medium** (sonnet + high workable if Stage 5
 left clean scaffolding). The code volume is moderate, but making a *local Qwen3
 14B* drive a ReAct tool loop reliably is prompt/tool-schema engineering that
 benefits from stronger judgment.
+
+**Status:** implemented. 161 tests passing (141 prior + 20 new). See
+`HANDOFF_STEP_6.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
+UPDATE_STATS (Step 6)" section of `README.md` for usage. All four open decisions
+resolved — see the "✅ Decisions" section below, now recording the final calls.
 
 ### Scope
 
@@ -217,19 +223,25 @@ benefits from stronger judgment.
   trend this prep", "any knee-pain mentions in the last two blocks?" all answered
   with tool-backed evidence. Stub-LLM tests green without a model.
 
-### ⚠️ Decisions you need to make
+### ✅ Decisions (resolved by the user, 2026-07-02 — now locked in)
 
-- **Which local model actually runs ANALYZE**: stay on Qwen3 14B initially, or
-  set up the Qwen3.6 35B-A3B MoE (§6.2)? Model-swap latency vs. reasoning depth.
-  Pure config, but the ReAct prompt should be tuned against whichever you pick.
-- **Evidence overflow policy**: cap on tool-result size / iteration count, and
-  what SYNTHESIZE does when the loop hits the cap (answer with partial evidence
-  + a disclaimer, or ask the user to narrow the question)?
-- **"Store this analysis?" interrupt** (§4.1): implement now (embeds SYNTHESIZE
-  output into `personal_notes` with a new `doc_type`) or defer? If implemented,
-  decide the `doc_type` value (e.g. `analysis`).
-- **UPDATE_STATS scope**: all four stat tables, or just `bodyweight` + `pr`
-  first (injury/measurement phrasing is more varied)?
+- **ANALYZE/SYNTHESIZE model**: the **Qwen3.6 35B-A3B MoE** (config
+  `nodes.analyze` / `nodes.synthesize`, both `qwen3.6:35b-a3b`). Step down to
+  `qwen3:14b` later if latency bottlenecks — pure config change; the ReAct prompt
+  is tuned for a capable local model. UPDATE_STATS stays on the 14B workhorse.
+- **Evidence overflow**: the ANALYZE loop is capped at `MAX_TOOL_CALLS = 8`
+  (model turns). On overflow it sets `evidence_truncated`; SYNTHESIZE answers
+  with the **partial evidence + a fixed disclaimer that also tells the user to
+  narrow the question scope** (specific exercise / shorter range / one metric).
+  Per-evidence-item serialization is capped at `MAX_EVIDENCE_CHARS = 2000`.
+- **"Store this analysis?" interrupt**: **implemented now.** SYNTHESIZE stashes
+  the answer + flags `offer_store`; a dedicated `store_offer` node interrupts
+  ("store this? yes/no") and, on yes, embeds the analysis into Chroma
+  `personal_notes` under `doc_type='analysis'` (`embed_analysis`, id
+  `analysis_<ms>`, `session_id=0`). Only offered when there's real evidence.
+- **UPDATE_STATS scope**: **`bodyweight` + `pr` only** for now (injury/measurement
+  deferred). The parse LLM auto-detects which of the two was reported and
+  normalizes the weight to lb; unknown PR exercises are declined at parse time.
 
 ---
 

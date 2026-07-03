@@ -59,22 +59,20 @@ def _counts(conn):
 # ---------------------------------------------------------------------------
 
 def test_placeholder_intents_route_and_reply(conn, checkpointer):
-    for intent, phrase in (
-        ("analyze", "analysis"),
-        ("generate", "program-writing"),
-        ("update_stats", "stat-update"),
-    ):
-        graph = _make_graph(
-            conn,
-            checkpointer,
-            router_model_factory=lambda i=intent: StubChatModel(f'{{"intent": "{i}"}}'),
-        )
-        result = graph.invoke(
-            _chat_input("do the thing"),
-            {"configurable": {"thread_id": f"t-{intent}"}},
-        )
-        assert phrase in _last_ai(result)
-        assert "isn't implemented yet" in _last_ai(result)
+    # GENERATE is the only remaining placeholder branch (ANALYZE/UPDATE_STATS
+    # landed in Stage 6). Their flows are covered in test_graph_analyze.py /
+    # test_graph_update_stats.py.
+    graph = _make_graph(
+        conn,
+        checkpointer,
+        router_model_factory=lambda: StubChatModel('{"intent": "generate"}'),
+    )
+    result = graph.invoke(
+        _chat_input("do the thing"),
+        {"configurable": {"thread_id": "t-generate"}},
+    )
+    assert "program-writing" in _last_ai(result)
+    assert "isn't implemented yet" in _last_ai(result)
 
 
 def test_chat_intent_routes_to_chitchat(conn, checkpointer):
