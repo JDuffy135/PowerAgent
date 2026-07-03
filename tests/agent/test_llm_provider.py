@@ -25,12 +25,36 @@ def test_get_chat_model_defaults_for_unknown_node(monkeypatch, tmp_path):
     assert model.model == llm_provider.DEFAULT_CHAT_MODEL
 
 
-def test_get_chat_model_cloud_not_implemented(monkeypatch, tmp_path):
+def test_get_chat_model_cloud_builds_chat_anthropic(monkeypatch, tmp_path):
     config = tmp_path / "config.yaml"
-    config.write_text("nodes:\n  router:\n    provider: cloud\n")
+    config.write_text(
+        "nodes:\n  generate:\n    provider: cloud\n    model: claude-sonnet-5\n"
+    )
+    monkeypatch.setattr(llm_provider, "CONFIG_PATH", config)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-123")
+
+    model = llm_provider.get_chat_model("generate")
+    assert type(model).__name__ == "ChatAnthropic"
+    assert model.model == "claude-sonnet-5"
+    assert model.anthropic_api_key.get_secret_value() == "sk-test-123"
+
+
+def test_get_chat_model_cloud_missing_key_raises(monkeypatch, tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text("nodes:\n  generate:\n    provider: cloud\n")
+    monkeypatch.setattr(llm_provider, "CONFIG_PATH", config)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        llm_provider.get_chat_model("generate")
+
+
+def test_get_chat_model_unknown_provider_raises(monkeypatch, tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text("nodes:\n  router:\n    provider: mainframe\n")
     monkeypatch.setattr(llm_provider, "CONFIG_PATH", config)
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="mainframe"):
         llm_provider.get_chat_model("router")
 
 

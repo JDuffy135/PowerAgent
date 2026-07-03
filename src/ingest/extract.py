@@ -12,6 +12,7 @@ provider is a `config.yaml` edit, not a call-site change.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import urllib.error
 import urllib.request
@@ -29,6 +30,11 @@ CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_TIER = "accessory"
+
+# Cloud provider defaults (Stage 7 **[DECISION]**: Anthropic API, claude-sonnet-5).
+DEFAULT_CLOUD_MODEL = "claude-sonnet-5"
+DEFAULT_API_KEY_ENV = "ANTHROPIC_API_KEY"
+DEFAULT_CLOUD_MAX_TOKENS = 16000
 
 # Prompt text in, raw JSON string out (before Pydantic validation).
 LLMCallable = Callable[[str], str]
@@ -79,15 +85,18 @@ def get_llm(
     """
     cfg = _node_config(node)
     provider = cfg.get("provider", "local")
-    if provider != "local":
-        raise NotImplementedError(f"Provider {provider!r} is not wired up yet (cloud lands in Stage 7)")
-
-    model = cfg.get("model", DEFAULT_MODEL)
-    host = cfg.get("host", DEFAULT_OLLAMA_HOST)
     if schema is None:
         schema = ParsedBatch.model_json_schema()
     if system_prompt is None:
         system_prompt = EXTRACTION_SYSTEM_PROMPT
+
+    if provider == "cloud":
+        return _cloud_llm(cfg, system_prompt=system_prompt, schema=schema)
+    if provider != "local":
+        raise ValueError(f"Unknown provider {provider!r} for node {node!r} (use 'local' or 'cloud')")
+
+    model = cfg.get("model", DEFAULT_MODEL)
+    host = cfg.get("host", DEFAULT_OLLAMA_HOST)
 
     def _call(prompt: str) -> str:
         payload = {
@@ -121,6 +130,88 @@ def _node_config(node: str) -> dict:
         return {}
     cfg = yaml.safe_load(CONFIG_PATH.read_text()) or {}
     return cfg.get("nodes", {}).get(node, {}) or {}
+
+
+# --------------------------------------------------------------------------
+# Cloud provider branch (Stage 7)
+# --------------------------------------------------------------------------
+
+def get_api_key(cfg: dict) -> str:
+    """Read the cloud API key from the env var named in the node config
+    (`api_key_env`, default ANTHROPIC_API_KEY). Only called on the cloud
+    branch, so `provider: local` never requires a key. Raises with a clear
+    message naming the missing variable."""
+    env_name = cfg.get("api_key_env", DEFAULT_API_KEY_ENV)
+    key = os.environ.get(env_name)
+    if not key:
+        raise RuntimeError(
+            f"Cloud provider requires an API key: set the {env_name} environment "
+            "variable (or point nodes.<node>.api_key_env at another variable)."
+        )
+    return key
+
+
+def _anthropic_client(api_key: str):
+    """Build the Anthropic SDK client. Module-level seam so tests can
+    monkeypatch it with a fake (no real API calls in CI). Imported lazily so
+    local-only setups never touch the `anthropic` package."""
+    import anthropic
+
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def _strip_fences(text: str) -> str:
+    """Drop a surrounding markdown code fence if the model added one."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[: -len("```")]
+    return stripped.strip()
+
+
+def _cloud_llm(cfg: dict, *, system_prompt: str, schema: dict) -> LLMCallable:
+    """`prompt -> raw JSON string` via the Anthropic Messages API.
+
+    The JSON schema is embedded in the system prompt rather than passed as an
+    API-enforced structured-output format: strict structured outputs require
+    schema constraints (`additionalProperties: false`, no defaults) that the
+    pipeline's arbitrary Pydantic schemas don't guarantee, and downstream
+    Pydantic validation is the real contract for this seam anyway (same as the
+    Ollama path). The key is resolved at build time so a missing key fails
+    fast, not mid-conversation.
+    """
+    model = cfg.get("model", DEFAULT_CLOUD_MODEL)
+    max_tokens = int(cfg.get("max_tokens", DEFAULT_CLOUD_MAX_TOKENS))
+    api_key = get_api_key(cfg)
+
+    system = (
+        f"{system_prompt}\n\n"
+        "Your output MUST be a single JSON object matching this JSON schema exactly "
+        "(no prose, no markdown fences):\n"
+        f"{json.dumps(schema)}"
+    )
+
+    def _call(prompt: str) -> str:
+        client = _anthropic_client(api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if response.stop_reason == "refusal":
+            raise RuntimeError(f"Cloud model {model!r} declined the request (stop_reason=refusal)")
+        text = "".join(
+            block.text for block in response.content if getattr(block, "type", None) == "text"
+        )
+        if not text:
+            raise RuntimeError(
+                f"Cloud model {model!r} returned no text (stop_reason={response.stop_reason!r})"
+            )
+        return _strip_fences(text)
+
+    return _call
 
 
 def extract_training_data(

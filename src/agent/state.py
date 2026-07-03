@@ -27,3 +27,6 @@ class AgentState(TypedDict, total=False):
 
     # UPDATE_STATS plumbing (Stage 6):
     pending_stat: dict | None         # parsed bodyweight/PR awaiting confirm-before-write
+
+    # GENERATE plumbing (Stage 7):
+    pending_draft: dict | None        # DraftProgram dump awaiting confirm-before-persist

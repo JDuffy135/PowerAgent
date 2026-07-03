@@ -1,4 +1,4 @@
-# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph (Steps 1–6)
+# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph (Steps 1–7)
 
 SQLite schema, exercise resolver, seed data, and four typed query tools
 (Step 1); the LLM extraction pipeline that turns raw log text into a
@@ -7,11 +7,13 @@ commit path plus Chroma prose embedding (Step 3); the rest of the typed
 query tools plus Chroma semantic search and a gated read-only SQL escape hatch
 (Step 4); the LangGraph agent core — router, INGEST pipeline with
 interrupt-based HITL review (corrections + block assignment), SqliteSaver
-checkpointing, and a minimal CLI REPL (Step 5); and the ANALYZE ReAct loop,
+checkpointing, and a minimal CLI REPL (Step 5); the ANALYZE ReAct loop,
 SYNTHESIZE answer-writer (with unit conversion + a "store this analysis?"
-offer), and UPDATE_STATS confirm-before-write path (Step 6). See
-`ARCHITECTURE.md` for the full design and `HANDOFF_STEP_6.md` for the latest
-handoff. GENERATE (program writer) + the cloud provider branch land in Stage 7.
+offer), and UPDATE_STATS confirm-before-write path (Step 6); and the GENERATE
+program writer (evidence-grounded structured drafts, HITL confirm, persisted
+as `draft` programs) plus the Anthropic cloud provider branch (Step 7). See
+`ARCHITECTURE.md` for the full design and `HANDOFF_STEP_7.md` for the latest
+handoff.
 
 ## Setup
 
@@ -255,6 +257,48 @@ All of it is covered by scripted-stub tests (`tests/agent/test_graph_analyze.py`
 `test_graph_update_stats.py`, `test_units.py`, `tests/test_stats.py`) — the
 tool-calling stub drives real tools against the seeded DB, no live model.
 
+## GENERATE (program writer) + cloud offload (Step 7)
+
+```text
+you> write me a 4-week strength block based on this prep
+coach> # Draft: 2026 Meet 2 Prep :: Strength Block 1 (focus: strength, 4 week(s))
+...
+## Week 1, Day 1 (w1d1)
+- Bench Press: 1x1 @ RPE 6, 4x4 @ RPE 7 @ ~225 lb
+...
+Save this as a draft program? It stays out of all analysis until started. Reply `yes` to save or `no` to discard.
+review> yes
+coach> Saved draft program '2026 Meet 2 Prep' (program id 3, block id 5, 96 programmed slot(s), status 'draft' — excluded from analysis until started).
+```
+
+- **GENERATE** (`src/agent/nodes/generate.py`) runs in two phases inside one
+  node: a bounded ReAct loop over the same tools ANALYZE uses (e1RM trends,
+  volume, **active injuries**, block outlines, programmed-vs-actual, note
+  search), then a structured-output draft call producing a `DraftProgram` —
+  Pydantic models mirroring `ParsedProgrammedSlot`, so slots are
+  machine-insertable. The rendered draft prints, then `generate_confirm`
+  interrupts; on `yes`, `src/tools/draft.py::persist_draft` writes
+  `program(status='draft')` + `block` + `programmed_slot` rows in one
+  transaction (slot exercises resolve best-effort; unresolved names are
+  flagged). Draft exclusion keeps saved drafts out of analysis; they're visible
+  via `get_programs('draft')` / `get_block_outline`.
+- **Guardrails**: the user's training philosophy (4-week ramping-RPE SBD waves,
+  weak-point variations outside peaking blocks, 4-5 days/week, injury
+  workarounds, starting-volume defaults) is encoded in
+  `generate.TRAINING_PHILOSOPHY` and injected into both GENERATE prompts.
+- **Cloud provider branch** (`provider: cloud` in `config.yaml`): the Anthropic
+  API, default model `claude-sonnet-5`. `get_chat_model` returns a
+  `ChatAnthropic`; the raw `get_llm` seam calls the `anthropic` SDK with the
+  target JSON schema embedded in the system prompt (downstream Pydantic
+  validation stays the contract, as on the Ollama path). The API key comes from
+  the env var named by `nodes.<node>.api_key_env` (default `ANTHROPIC_API_KEY`)
+  and is **never required when `provider: local`**. GENERATE defaults to cloud;
+  flipping it back to local is a config edit.
+
+Covered by scripted-stub tests (`tests/agent/test_graph_generate.py`) and
+fake-transport cloud provider tests (`tests/ingest/test_get_llm.py`,
+`tests/agent/test_llm_provider.py`) — no real API calls in CI.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
@@ -267,9 +311,11 @@ the rest of `src/tools/queries.py`, `src/tools/vector.py`, `src/tools/sql.py`
 (`src/agent/nodes/analyze.py`, `src/agent/tools.py`), SYNTHESIZE +
 "store this analysis?" (`src/agent/nodes/synthesize.py`, `src/agent/units.py`,
 `embed_analysis`), and UPDATE_STATS (`src/agent/nodes/update_stats.py`,
-`src/tools/stats.py`) (Step 6); full pytest coverage throughout (161 tests).
+`src/tools/stats.py`) (Step 6); GENERATE + draft persistence + the Anthropic
+cloud provider branch (`src/agent/nodes/generate.py`, `src/tools/draft.py`,
+cloud branches in `src/ingest/extract.py` / `src/agent/llm_provider.py`)
+(Step 7); full pytest coverage throughout (171 tests).
 
 Explicitly not implemented (future steps per `ARCHITECTURE.md` /
-`IMPLEMENTATION_ROADMAP.md`): program generation (GENERATE — still a placeholder
-node that replies "not implemented yet"), cloud provider branch, xlsx/pdf
-loading, `search_knowledge`/knowledge-base ingestion, Streamlit/Gradio UI.
+`IMPLEMENTATION_ROADMAP.md`): xlsx/pdf loading, `search_knowledge`/
+knowledge-base ingestion, Streamlit/Gradio UI, the program/block organizer.

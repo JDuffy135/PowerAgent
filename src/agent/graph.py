@@ -1,8 +1,8 @@
 """Agent graph assembly (ARCHITECTURE.md §4.1) + checkpointer.
 
-Topology (Stage 6): ROUTER fans out to INGEST, ANALYZE, UPDATE_STATS, CHITCHAT,
-and a placeholder GENERATE (Stage 7). Every `interrupt()` sits at the top of its
-own node so the resume-replay contract holds (see `nodes/ingest.py`):
+Topology (Stage 7): ROUTER fans out to INGEST, ANALYZE, GENERATE, UPDATE_STATS,
+and CHITCHAT. Every `interrupt()` sits at the top of its own node so the
+resume-replay contract holds (see `nodes/ingest.py`):
 
     router -> ingest_parse -> ingest_review <-> (correction loop)
                                    |-> ingest_commit <-> (bad-reply loop) -> END
@@ -11,6 +11,8 @@ own node so the resume-replay contract holds (see `nodes/ingest.py`):
                                                  '-> END (no evidence to store)
     router -> update_stats_parse -> update_stats_confirm(interrupt) <-> (reask) -> END
                                 '-> END (declined / out of scope)
+    router -> generate (ReAct loop + draft) -> generate_confirm(interrupt) <-> (reask) -> END
+                                            '-> END (draft failed validation)
 
 **[DECISION]** Checkpoints live in a separate `data/checkpoints.db`
 (`SqliteSaver`), keeping `training.db`'s schema purely domain data.
@@ -31,7 +33,8 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agent import llm_provider
 from src.agent.nodes.analyze import make_analyze_node
-from src.agent.nodes.chitchat import make_chitchat_node, make_placeholder_node
+from src.agent.nodes.chitchat import make_chitchat_node
+from src.agent.nodes.generate import make_generate_confirm_node, make_generate_node
 from src.agent.nodes.ingest import (
     make_ingest_commit_node,
     make_ingest_parse_node,
@@ -75,6 +78,8 @@ def build_graph(
     analyze_model_factory: Callable[[], object] | None = None,
     synthesize_model_factory: Callable[[], object] | None = None,
     update_stats_llm_factory: Callable[[], object] | None = None,
+    generate_model_factory: Callable[[], object] | None = None,
+    generate_llm_factory: Callable[[], object] | None = None,
     embedder=None,
     chroma_client=None,
     embed_prose: bool = True,
@@ -94,6 +99,8 @@ def build_graph(
     analyze_models = analyze_model_factory or (lambda: llm_provider.get_chat_model("analyze"))
     synthesize_models = synthesize_model_factory or (lambda: llm_provider.get_chat_model("synthesize"))
     update_stats_llms = update_stats_llm_factory or (lambda: None)
+    generate_models = generate_model_factory or (lambda: llm_provider.get_chat_model("generate"))
+    generate_llms = generate_llm_factory or (lambda: None)
 
     graph = StateGraph(AgentState)
     graph.add_node("router", make_router_node(router_models))
@@ -119,7 +126,13 @@ def build_graph(
     )
     graph.add_node("update_stats_parse", make_update_stats_parse_node(conn, update_stats_llms))
     graph.add_node("update_stats_confirm", make_update_stats_confirm_node(conn))
-    graph.add_node("generate", make_placeholder_node("program-writing", "Stage 7"))
+    graph.add_node(
+        "generate",
+        make_generate_node(
+            conn, generate_models, generate_llms, embedder=embedder, chroma_client=chroma_client
+        ),
+    )
+    graph.add_node("generate_confirm", make_generate_confirm_node(conn))
 
     graph.add_edge(START, "router")
     graph.add_conditional_edges(
@@ -170,7 +183,18 @@ def build_graph(
         {"reask": "update_stats_confirm", "done": END},
     )
 
-    for node in ("chitchat", "generate"):
-        graph.add_edge(node, END)
+    # GENERATE: draft -> (confirm loop | failed draft) -> END
+    graph.add_conditional_edges(
+        "generate",
+        lambda state: "confirm" if state.get("pending_draft") else "end",
+        {"confirm": "generate_confirm", "end": END},
+    )
+    graph.add_conditional_edges(
+        "generate_confirm",
+        lambda state: state["review_decision"],
+        {"reask": "generate_confirm", "done": END},
+    )
+
+    graph.add_edge("chitchat", END)
 
     return graph.compile(checkpointer=checkpointer)

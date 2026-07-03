@@ -46,3 +46,11 @@ nodes:
     provider: local
     model: qwen3:14b
     host: http://localhost:11434
+  # GENERATE is the heaviest reasoning in the system (ARCHITECTURE.md §4.2).
+  # [DECISION] Cloud offload by default: Anthropic claude-sonnet-5, key read
+  # from the env var named by api_key_env (never required for local nodes).
+  # Flip provider -> local (e.g. qwen3.6:35b-a3b + host) to keep it on-box.
+  generate:
+    provider: cloud
+    model: claude-sonnet-5
+    api_key_env: ANTHROPIC_API_KEY

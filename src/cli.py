@@ -31,7 +31,7 @@ Commands:
   exit | quit      leave
 Anything else is routed by intent: ask about your history ("best bench in
 March?"), report a stat ("bodyweight 146 today", "hit a 405x1 deadlift PR"),
-or just chat. Program generation lands in Stage 7.
+ask for a program ("write me a 4-week strength block"), or just chat.
 """
 
 
@@ -47,6 +47,7 @@ def make_input(line: str) -> dict:
         "analysis_text": None,
         "offer_store": False,
         "pending_stat": None,
+        "pending_draft": None,
     }
     if line.startswith("/ingest"):
         path = line[len("/ingest"):].strip() or None

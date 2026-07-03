@@ -56,12 +56,69 @@ def test_get_llm_unknown_node_falls_back_to_defaults(monkeypatch):
     call("text")  # should not raise; falls back to local/default model/host
 
 
-def test_get_llm_cloud_provider_not_implemented(monkeypatch, tmp_path):
+def _cloud_config(monkeypatch, tmp_path, extra: str = ""):
     config = tmp_path / "config.yaml"
-    config.write_text("nodes:\n  ingest_extract:\n    provider: cloud\n")
+    config.write_text(
+        "nodes:\n  ingest_extract:\n    provider: cloud\n    model: claude-sonnet-5\n" + extra
+    )
     monkeypatch.setattr(extract, "CONFIG_PATH", config)
 
-    with pytest.raises(NotImplementedError):
+
+def test_get_llm_cloud_missing_key_raises_at_build_time(monkeypatch, tmp_path):
+    _cloud_config(monkeypatch, tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        extract.get_llm("ingest_extract")
+
+
+def test_get_llm_cloud_calls_anthropic_with_fake_client(monkeypatch, tmp_path):
+    """Cloud branch unit test with a fake transport — no real API calls."""
+    _cloud_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-123")
+
+    captured = {}
+
+    class _Block:
+        type = "text"
+        text = '```json\n{"sessions": []}\n```'  # fences must be stripped
+
+    class _Response:
+        stop_reason = "end_turn"
+        content = [_Block()]
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    def fake_client_factory(api_key):
+        captured["api_key"] = api_key
+        return _FakeClient()
+
+    monkeypatch.setattr(extract, "_anthropic_client", fake_client_factory)
+
+    call = extract.get_llm("ingest_extract")
+    result = call("some raw log text")
+
+    assert result == '{"sessions": []}'
+    assert captured["api_key"] == "sk-test-123"
+    assert captured["model"] == "claude-sonnet-5"
+    assert captured["messages"] == [{"role": "user", "content": "some raw log text"}]
+    # The schema rides in the system prompt (downstream Pydantic is the contract).
+    assert "JSON schema" in captured["system"]
+    assert "sessions" in captured["system"]
+
+
+def test_get_llm_cloud_custom_api_key_env(monkeypatch, tmp_path):
+    _cloud_config(monkeypatch, tmp_path, extra="    api_key_env: MY_CLOUD_KEY\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("MY_CLOUD_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="MY_CLOUD_KEY"):
         extract.get_llm("ingest_extract")
 
 

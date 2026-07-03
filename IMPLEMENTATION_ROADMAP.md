@@ -34,7 +34,7 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_6.md` (the current handoff) for current state,
+`HANDOFF_STEP_7.md` (the current handoff) for current state,
 and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
@@ -109,7 +109,7 @@ the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
 
 **Status:** implemented. 141 tests passing (107 prior + 34 new). See
-`HANDOFF_STEP_6.md` (the current handoff) for the full writeup and the
+`HANDOFF_STEP_7.md` (the current handoff) for the full writeup and the
 "LangGraph agent core + CLI"
 section of `README.md` for usage. All five open decisions resolved — see the
 "Decisions" section below, now recording the final calls.
@@ -190,7 +190,7 @@ left clean scaffolding). The code volume is moderate, but making a *local Qwen3
 benefits from stronger judgment.
 
 **Status:** implemented. 161 tests passing (141 prior + 20 new). See
-`HANDOFF_STEP_6.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
+`HANDOFF_STEP_7.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
 UPDATE_STATS (Step 6)" section of `README.md` for usage. All four open decisions
 resolved — see the "✅ Decisions" section below, now recording the final calls.
 
@@ -245,11 +245,17 @@ resolved — see the "✅ Decisions" section below, now recording the final call
 
 ---
 
-## Stage 7 — GENERATE (program writer) + cloud offload
+## Stage 7 — GENERATE (program writer) + cloud offload ✅ DONE (2026-07-02)
 
 **Minimum effective model: sonnet + high** for the plumbing; the *value* of this
 stage is in the GENERATE system prompt, and drafting/iterating that prompt is
 where opus + medium pays for itself. Recommendation: opus + medium.
+
+**Status:** implemented. 171 tests passing (161 prior + 10 net new). See
+`HANDOFF_STEP_7.md` for the full writeup and the "GENERATE (program writer) +
+cloud offload (Step 7)" section of `README.md` for usage. All four open
+decisions resolved — see the "✅ Decisions" section below, now recording the
+final calls.
 
 ### Scope
 
@@ -276,21 +282,35 @@ where opus + medium pays for itself. Recommendation: opus + medium.
   draft grounded in queried history; on approval it exists as a `draft` program
   queryable via `get_programs('draft')` / `get_block_outline`.
 
-### ⚠️ Decisions you need to make
+### ✅ Decisions (resolved by the user, 2026-07-02 — now locked in)
 
-- **Cloud vendor + SDK**: Anthropic API directly (`langchain-anthropic` /
-  `anthropic` SDK — recommended default: `claude-sonnet-5`) vs. an
-  OpenAI-compatible generic endpoint. Also: which env var names.
-- **Privacy option** (§6.3): send raw evidence to the cloud, or implement the
-  anonymized-summary mode now? Recommendation: defer, but confirm.
-- **Draft output format**: must GENERATE emit a structured Pydantic program
-  (machine-insertable into `programmed_slot`, harder for the LLM) or prose with
-  a structured skeleton (easier, but slots need a second extraction pass)?
-  Recommendation: structured output reusing `ParsedProgrammedSlot`-style models.
-- **Generation guardrails**: any hard constraints to encode in the prompt
-  (e.g. respect active injuries, cap weekly tonnage growth ~X%)? Only you know
-  your training philosophy — a short bullet list from you will materially
-  improve the prompt.
+- **Cloud vendor + SDK**: the **Anthropic API, default model `claude-sonnet-5`**.
+  `get_chat_model` uses `langchain-anthropic` (`ChatAnthropic`); the raw
+  `get_llm` seam uses the `anthropic` SDK directly, with the target JSON schema
+  embedded in the system prompt (arbitrary Pydantic schemas aren't guaranteed
+  strict-structured-output-compatible; downstream Pydantic validation stays the
+  contract, same as the Ollama path). API key env var: the name is configurable
+  per node via `nodes.<node>.api_key_env`, **default `ANTHROPIC_API_KEY`**; a
+  key is never required when `provider: local`. GENERATE defaults to
+  `provider: cloud` in `config.yaml`.
+- **Privacy option**: **deferred** — cloud nodes receive the raw evidence.
+  The anonymized-summary mode remains a future option (§6.3).
+- **Draft output format**: **structured output** — `DraftProgram`/`DraftSlot`
+  Pydantic models reusing the `ParsedProgrammedSlot` shape, so an approved
+  draft is machine-insertable into `program`/`block`/`programmed_slot` with no
+  second extraction pass.
+- **Generation guardrails**: the user's training philosophy is encoded verbatim
+  as `generate.TRAINING_PHILOSOPHY` and injected into both GENERATE prompts:
+  (1) easy-moderate SBD work, accessories pushed to failure at recoverable
+  volume; (2) 4-week SBD waves with ramping top-set RPE (wk1 easy → wk4
+  near-max, e.g. deadlift single RPE 5→9); (3) weak-point SBD variations ≥1x/wk
+  in every block except peaking blocks (comp-specific there); (4) 4-5 training
+  days/wk unless specified; (5) program around active injuries (substitute
+  patterns for a whole block, trim volume/intensity as needed); (6) unknown
+  accessory volume → start ~10 sets/wk per muscle group, counting only 7+-rep
+  SBD sets toward it; (7) unknown SBD volume → ~7-9 weekly deadlift, 8-10
+  squat, 10-15 bench sets (variations included); (8) default frequency: squat/
+  deadlift 2x/wk (primary + secondary), bench 3x/wk (heavy/light/moderate).
 
 ---
 
