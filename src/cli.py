@@ -15,6 +15,7 @@ fed back via `Command(resume=...)` -- covering both the batch-review loop
 """
 from __future__ import annotations
 
+import shlex
 import uuid
 from pathlib import Path
 
@@ -24,15 +25,85 @@ from langgraph.types import Command
 from src.agent.graph import build_graph, get_checkpointer
 from src.agent.llm_provider import CONFIG_PATH, load_config
 from src.db.connection import get_conn, init_db
+from src.ingest.knowledge import KnowledgeDoc, get_metadata_llm, ingest_knowledge_file
 
 BANNER = """Powerlifting Coach -- CLI REPL
 Commands:
   /ingest <path>   ingest a training log file (HITL review before commit)
+  /learn <path> [--topic T] [--title ...] [--author ...] [--year Y] [--source ...]
+                   add reference material (study/article/PDF) to the knowledge
+                   base -- no review; the LLM guesses any metadata you omit
   exit | quit      leave
 Anything else is routed by intent: ask about your history ("best bench in
 March?"), report a stat ("bodyweight 146 today", "hit a 405x1 deadlift PR"),
 ask for a program ("write me a 4-week strength block"), or just chat.
 """
+
+
+def parse_learn(line: str) -> tuple[str | None, KnowledgeDoc]:
+    """Parse a `/learn <path> [--flag value ...]` line into (path, KnowledgeDoc).
+
+    Recognized flags mirror the knowledge metadata fields: `--source --title
+    --topic --author --year`. Anything the user omits stays `None` on the doc, so
+    the LLM guess pass fills it in (or it defaults to NULL). Returns `(None, ...)`
+    if no path was given.
+    """
+    tokens = shlex.split(line[len("/learn"):].strip())
+    path: str | None = None
+    fields: dict[str, str] = {}
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.startswith("--"):
+            key = tok[2:]
+            value = tokens[i + 1] if i + 1 < len(tokens) else ""
+            if key in KnowledgeDoc.model_fields:
+                fields[key] = value
+            i += 2
+            continue
+        if path is None:
+            path = tok
+        i += 1
+
+    if "year" in fields:
+        try:
+            fields["year"] = int(fields["year"])  # type: ignore[assignment]
+        except ValueError:
+            fields.pop("year")
+
+    return path, KnowledgeDoc(**fields)
+
+
+_UNSET = object()
+
+
+def run_learn(line: str, *, llm=_UNSET, embedder=None, chroma_client=None, write=print) -> None:
+    """Handle a `/learn` line: load the file, guess missing metadata, embed it.
+
+    `llm` defaults to the config-routed metadata guesser (`get_metadata_llm`);
+    tests pass a stub (or `None` to skip guessing) so no live model is needed.
+    """
+    path, doc = parse_learn(line)
+    if not path:
+        write("usage: /learn <path> [--topic T] [--title ...] [--author ...] [--year Y]")
+        return
+    if llm is _UNSET:
+        llm = get_metadata_llm()
+    try:
+        n = ingest_knowledge_file(
+            path,
+            doc=doc,
+            llm=llm,
+            embedder=embedder,
+            client=chroma_client,
+        )
+    except FileNotFoundError:
+        write(f"coach> file not found: {path}")
+        return
+    except Exception as exc:  # loader/embed failures shouldn't kill the REPL
+        write(f"coach> could not learn {path}: {exc}")
+        return
+    write(f"coach> learned {path} ({n} chunk{'s' if n != 1 else ''} embedded into the knowledge base).")
 
 
 def make_input(line: str) -> dict:
@@ -117,6 +188,9 @@ def main() -> None:
             continue
         if line.lower() in {"exit", "quit", "/exit", "/quit"}:
             break
+        if line.startswith("/learn"):
+            run_learn(line)
+            continue
         run_turn(graph, config, make_input(line))
 
     conn.close()

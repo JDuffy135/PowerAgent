@@ -1,4 +1,4 @@
-# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph (Steps 1–7)
+# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph (Steps 1–8)
 
 SQLite schema, exercise resolver, seed data, and four typed query tools
 (Step 1); the LLM extraction pipeline that turns raw log text into a
@@ -11,9 +11,10 @@ checkpointing, and a minimal CLI REPL (Step 5); the ANALYZE ReAct loop,
 SYNTHESIZE answer-writer (with unit conversion + a "store this analysis?"
 offer), and UPDATE_STATS confirm-before-write path (Step 6); and the GENERATE
 program writer (evidence-grounded structured drafts, HITL confirm, persisted
-as `draft` programs) plus the Anthropic cloud provider branch (Step 7). See
-`ARCHITECTURE.md` for the full design and `HANDOFF_STEP_7.md` for the latest
-handoff.
+as `draft` programs) plus the Anthropic cloud provider branch (Step 7); and the
+xlsx/pdf file loaders plus knowledge-base ingestion (`search_knowledge` over a
+Chroma `knowledge` collection) (Step 8). See `ARCHITECTURE.md` for the full
+design and `HANDOFF_STEP_8.md` for the latest handoff.
 
 ## Setup
 
@@ -299,6 +300,50 @@ Covered by scripted-stub tests (`tests/agent/test_graph_generate.py`) and
 fake-transport cloud provider tests (`tests/ingest/test_get_llm.py`,
 `tests/agent/test_llm_provider.py`) — no real API calls in CI.
 
+## File loaders + knowledge base (Step 8)
+
+`parse_upload` now loads `.xlsx` (openpyxl) and `.pdf` (pypdf) alongside `.txt`,
+feeding the same `extract_training_data` pipeline:
+
+```python
+from src.ingest.loaders import parse_upload
+parse_upload("logs/block1.xlsx")   # one text block per sheet, header + tab-joined rows
+parse_upload("logs/meet.pdf")      # one text block per page
+```
+
+**No structural assumptions** are made about a workbook's layout — every coach's
+sheet looks different, so the loader emits the raw grid verbatim (blank
+rows/columns dropped) and lets the LLM extractor figure out the shape. Cell text
+is preserved uncleaned (mixed lb/kg, pin settings, emoji) — that mess is exactly
+what the extractor is built for.
+
+Reference material (studies, articles, PDFs, transcripts) goes into the Chroma
+`knowledge` collection via a **direct embed path — no HITL** (it isn't training
+data):
+
+```text
+you> /learn studies/rpe_autoregulation.pdf --topic RPE --author "Helms et al" --year 2018
+coach> learned studies/rpe_autoregulation.pdf (4 chunks embedded into the knowledge base).
+```
+
+- **Chunker** (`src/ingest/knowledge.py::chunk_text`): character-approximation of
+  a token chunker (~4 chars/token → ~650-token chunks at ~15% overlap), so no
+  tokenizer dependency.
+- **Metadata is flags-first**: any of `--source/--title/--topic/--author/--year`
+  you pass wins; a small LLM pass guesses whichever you omit from the document
+  text, and anything still unknown defaults to NULL.
+- **`search_knowledge(query, topic=None)`** (`src/tools/vector.py`) does
+  similarity search over the collection — unscoped is allowed here (unlike
+  `search_notes`), since reference material isn't time-windowed personal history.
+  It's registered as `search_knowledge_base` in `make_analyze_tools`, so both
+  ANALYZE and GENERATE can pull external theory into their reasoning.
+
+Covered by loader golden-file tests (`tests/ingest/test_loaders.py`), chunker +
+ingestion round-trip tests (`tests/ingest/test_knowledge.py`), `search_knowledge`
+tests (`tests/test_vector.py`), and `/learn` parsing/handler tests
+(`tests/test_cli.py`) — all with the fake embedder + in-memory Chroma, no live
+model.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
@@ -314,8 +359,12 @@ the rest of `src/tools/queries.py`, `src/tools/vector.py`, `src/tools/sql.py`
 `src/tools/stats.py`) (Step 6); GENERATE + draft persistence + the Anthropic
 cloud provider branch (`src/agent/nodes/generate.py`, `src/tools/draft.py`,
 cloud branches in `src/ingest/extract.py` / `src/agent/llm_provider.py`)
-(Step 7); full pytest coverage throughout (171 tests).
+(Step 7); xlsx/pdf loaders and knowledge-base ingestion + `search_knowledge`
+(`src/ingest/loaders.py`, `src/ingest/knowledge.py`, `search_knowledge` in
+`src/tools/vector.py`, `/learn` in `src/cli.py`) (Step 8); full pytest coverage
+throughout (198 tests).
 
 Explicitly not implemented (future steps per `ARCHITECTURE.md` /
-`IMPLEMENTATION_ROADMAP.md`): xlsx/pdf loading, `search_knowledge`/
-knowledge-base ingestion, Streamlit/Gradio UI, the program/block organizer.
+`IMPLEMENTATION_ROADMAP.md`): Streamlit/Gradio UI, historical backfill, the
+`display_unit: kg` end-to-end pass, block-review / form-cue embedding paths, and
+the program/block organizer (all Stage 9).

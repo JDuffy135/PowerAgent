@@ -34,7 +34,7 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_7.md` (the current handoff) for current state,
+`HANDOFF_STEP_8.md` (the current handoff) for current state,
 and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
@@ -109,7 +109,7 @@ the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
 
 **Status:** implemented. 141 tests passing (107 prior + 34 new). See
-`HANDOFF_STEP_7.md` (the current handoff) for the full writeup and the
+`HANDOFF_STEP_8.md` (the current handoff) for the full writeup and the
 "LangGraph agent core + CLI"
 section of `README.md` for usage. All five open decisions resolved — see the
 "Decisions" section below, now recording the final calls.
@@ -190,7 +190,7 @@ left clean scaffolding). The code volume is moderate, but making a *local Qwen3
 benefits from stronger judgment.
 
 **Status:** implemented. 161 tests passing (141 prior + 20 new). See
-`HANDOFF_STEP_7.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
+`HANDOFF_STEP_8.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
 UPDATE_STATS (Step 6)" section of `README.md` for usage. All four open decisions
 resolved — see the "✅ Decisions" section below, now recording the final calls.
 
@@ -252,7 +252,7 @@ stage is in the GENERATE system prompt, and drafting/iterating that prompt is
 where opus + medium pays for itself. Recommendation: opus + medium.
 
 **Status:** implemented. 171 tests passing (161 prior + 10 net new). See
-`HANDOFF_STEP_7.md` for the full writeup and the "GENERATE (program writer) +
+`HANDOFF_STEP_8.md` for the full writeup and the "GENERATE (program writer) +
 cloud offload (Step 7)" section of `README.md` for usage. All four open
 decisions resolved — see the "✅ Decisions" section below, now recording the
 final calls.
@@ -314,11 +314,16 @@ final calls.
 
 ---
 
-## Stage 8 — File loaders (xlsx/pdf) + knowledge base ingestion
+## Stage 8 — File loaders (xlsx/pdf/txt) + knowledge base ingestion ✅ DONE (2026-07-02)
 
 **Minimum effective model: sonnet + medium.** Well-trodden libraries and an
 established pipeline shape. Independent of Stages 5–7; can run any time after
 Stage 3 (only `search_knowledge` registration depends on Stage 6's tool wiring).
+
+**Status:** implemented. 198 tests passing (171 prior + 27 new). See
+`HANDOFF_STEP_8.md` for the full writeup and the "File loaders + knowledge base
+(Step 8)" section of `README.md` for usage. All three open decisions resolved —
+see the "✅ Decisions" section below, now recording the final calls.
 
 ### Scope
 
@@ -338,18 +343,31 @@ Stage 3 (only `search_knowledge` registration depends on Stage 6's tool wiring).
 4. Tests: loader golden files; chunker unit tests (sizes/overlap); fake-embedder
    ingestion + retrieval round-trip.
 
-### ⚠️ Decisions you need to make
+### ✅ Decisions (resolved by the user, 2026-07-02 — now locked in)
 
-- **Chunker**: token-based (needs a tokenizer dep, e.g. tiktoken) vs.
-  character-approximation (~4 chars/token, zero deps). Recommendation:
-  character-approximation.
-- **Knowledge ingest UX**: CLI command (`/learn <path> --topic ...`) vs. routed
-  through the agent graph? A CLI command is simpler and metadata (title/author/
-  year) mostly can't be inferred reliably — decide whether an LLM pass guesses
-  metadata or the user supplies it as flags.
-- **xlsx structure assumption**: your real logs' workbook layout (one block per
-  sheet? weeks as columns?) — provide one representative file as a fixture, or
-  the loader will be built against guesses.
+- **Chunker**: **character-approximation** — `src/ingest/knowledge.py::chunk_text`
+  approximates a token chunker at ~4 chars/token (`DEFAULT_CHUNK_CHARS = 2600`,
+  ~650 tokens; ~15% overlap = `DEFAULT_OVERLAP_CHARS = 390`), so no tokenizer
+  dependency is pulled in. The window slides by `chunk_chars - overlap_chars`;
+  short inputs yield one chunk.
+- **Knowledge ingest UX**: a **CLI command, `/learn <path> [--source/--title/
+  --topic/--author/--year ...]`**, embedding directly (no HITL — reference
+  material, not training data). **Metadata is flags-first with an LLM fallback**:
+  any flag the user passes wins; a small LLM pass (`guess_metadata`, reusing the
+  `get_llm` seam via `get_metadata_llm`) fills whichever fields were omitted from
+  the document text; anything still unknown **defaults to NULL** (stored as
+  `''`/`0` in Chroma scalar metadata). `source` is never guessed — it's upload
+  provenance, defaulting to the file name.
+- **xlsx structure assumption**: **none — the loader is built around guesses.**
+  Every coach's workbook differs (blocks-per-sheet, weeks-as-columns, free-form),
+  so `_load_xlsx` makes no structural assumptions: one text block per sheet with a
+  `=== Sheet: <name> ===` header, each non-empty row tab-joined verbatim (blank
+  rows/trailing-blank cells dropped), `data_only=True` so formula cells yield
+  cached values. The messy cell strings are preserved uncleaned for the LLM
+  extractor. Fixture: `tests/ingest/fixtures/training_log.xlsx` (two sheets, mixed
+  lb/kg, `Reps: N/A`, emoji). PDF path (`_load_pdf`, pypdf) mirrors it: one block
+  per page, `=== Page N ===` headers, empty/scanned pages skipped (OCR out of
+  scope). Fixture: `tests/ingest/fixtures/study.pdf`.
 
 ---
 

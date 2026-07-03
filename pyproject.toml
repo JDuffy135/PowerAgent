@@ -13,6 +13,8 @@ dependencies = [
     "langchain-ollama>=1.0",
     "langchain-anthropic>=1.0",
     "anthropic>=0.60",
+    "openpyxl>=3.1",
+    "pypdf>=6.0",
 ]
 
 [project.optional-dependencies]

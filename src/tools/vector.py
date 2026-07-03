@@ -13,6 +13,7 @@ from typing import Sequence
 from pydantic import BaseModel
 
 from src.ingest.embed import PERSONAL_NOTES_COLLECTION, Embedder, get_chroma_client, get_embedder
+from src.ingest.knowledge import KNOWLEDGE_COLLECTION
 
 
 class NoteResult(BaseModel):
@@ -109,3 +110,66 @@ def search_notes(
         )
 
     return notes
+
+
+class KnowledgeResult(BaseModel):
+    source: str | None
+    title: str | None
+    topic: str | None
+    author: str | None
+    year: int | None
+    text: str
+    distance: float | None
+
+
+def search_knowledge(
+    query: str,
+    topic: str | None = None,
+    n_results: int = 5,
+    embedder: Embedder | None = None,
+    client=None,
+) -> list[KnowledgeResult]:
+    """Semantic search over the reference `knowledge` collection (§3.2).
+
+    Unlike `search_notes`, a scope filter is *optional* here: knowledge is
+    reference material, not time-windowed personal history, so an unscoped
+    similarity search is legitimate. Passing `topic` narrows to matching docs via
+    a native Chroma `where` clause. Reuses the same embedder/client seams so tests
+    inject a fake embedder + in-memory client.
+    """
+    where = {"topic": topic} if topic else None
+
+    if embedder is None:
+        embedder = get_embedder()
+    if client is None:
+        client = get_chroma_client()
+
+    collection = client.get_or_create_collection(KNOWLEDGE_COLLECTION)
+
+    query_embedding = embedder([query])[0]
+    result = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_results,
+        where=where,
+    )
+
+    documents = result.get("documents", [[]])[0]
+    metadatas = result.get("metadatas", [[]])[0]
+    distances = (result.get("distances") or [[]])[0]
+
+    hits: list[KnowledgeResult] = []
+    for i, doc in enumerate(documents):
+        metadata = metadatas[i] or {}
+        hits.append(
+            KnowledgeResult(
+                source=metadata.get("source") or None,
+                title=metadata.get("title") or None,
+                topic=metadata.get("topic") or None,
+                author=metadata.get("author") or None,
+                year=metadata.get("year") or None,
+                text=doc,
+                distance=distances[i] if i < len(distances) else None,
+            )
+        )
+
+    return hits

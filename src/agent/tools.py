@@ -26,7 +26,7 @@ from langchain_core.tools import StructuredTool, tool
 from src.tools import queries as q
 from src.tools.queries import ExerciseNotFound
 from src.tools.sql import ReadonlySQLError, ReadonlySQLTimeout, run_readonly_sql
-from src.tools.vector import search_notes
+from src.tools.vector import search_knowledge, search_notes
 
 
 def _dump(result) -> dict:
@@ -155,6 +155,19 @@ def make_analyze_tools(conn: sqlite3.Connection, *, embedder=None, chroma_client
         return {"result": [r.model_dump() for r in results]}
 
     @tool
+    def search_knowledge_base(query: str, topic: str | None = None) -> dict:
+        """Semantic search over reference material (studies, articles, transcripts) in the
+        knowledge base. Use for external/theory questions ('what does research say about RPE?'),
+        NOT the user's own logs. Optional `topic` narrows the search (e.g. 'hypertrophy')."""
+        results = search_knowledge(
+            query,
+            topic=topic,
+            embedder=embedder,
+            client=chroma_client,
+        )
+        return {"result": [r.model_dump() for r in results]}
+
+    @tool
     def run_sql(query: str) -> dict:
         """ESCAPE HATCH: run one read-only SELECT when no typed tool fits. Prefer the typed tools.
         Rejects anything that isn't a single SELECT. Weights are stored in lb."""
@@ -178,5 +191,6 @@ def make_analyze_tools(conn: sqlite3.Connection, *, embedder=None, chroma_client
         get_block_outline,
         compare_programmed_vs_actual,
         search_training_notes,
+        search_knowledge_base,
         run_sql,
     ]

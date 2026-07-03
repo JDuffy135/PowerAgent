@@ -1,7 +1,8 @@
 import pytest
 
 from src.ingest.embed import SessionNote, embed_session_notes
-from src.tools.vector import search_notes
+from src.ingest.knowledge import KnowledgeDoc, ingest_knowledge
+from src.tools.vector import search_knowledge, search_notes
 
 
 @pytest.fixture()
@@ -84,3 +85,45 @@ def test_search_notes_doc_type_filter(seeded_notes):
     )
     assert len(results) == 3
     assert all(r.doc_type == "session_note" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# search_knowledge (reference collection)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def seeded_knowledge(fake_embedder, chroma_client):
+    ingest_knowledge(
+        "Autoregulation via RPE lets lifters adjust load to daily readiness.",
+        doc=KnowledgeDoc(source="rpe.pdf", title="RPE Guide", topic="autoregulation"),
+        embedder=fake_embedder,
+        client=chroma_client,
+    )
+    ingest_knowledge(
+        "Deadlift weekly volume landmarks typically fall between 7 and 9 hard sets.",
+        doc=KnowledgeDoc(source="dl.pdf", title="DL Volume", topic="volume"),
+        embedder=fake_embedder,
+        client=chroma_client,
+    )
+    return fake_embedder, chroma_client
+
+
+def test_search_knowledge_unscoped_is_allowed(seeded_knowledge):
+    fake_embedder, chroma_client = seeded_knowledge
+    # Unlike search_notes, no metadata filter is required for reference material.
+    results = search_knowledge("readiness", embedder=fake_embedder, client=chroma_client)
+    assert len(results) == 2
+
+
+def test_search_knowledge_topic_filter(seeded_knowledge):
+    fake_embedder, chroma_client = seeded_knowledge
+    results = search_knowledge(
+        "anything", topic="volume", embedder=fake_embedder, client=chroma_client
+    )
+    assert len(results) == 1
+    assert results[0].source == "dl.pdf"
+    assert results[0].title == "DL Volume"
+
+
+def test_search_knowledge_empty_collection(fake_embedder, chroma_client):
+    assert search_knowledge("x", embedder=fake_embedder, client=chroma_client) == []
