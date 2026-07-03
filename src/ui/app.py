@@ -28,7 +28,7 @@ if str(_ROOT) not in sys.path:
 from src.agent.graph import build_graph, get_checkpointer  # noqa: E402
 from src.agent.llm_provider import CONFIG_PATH, load_config  # noqa: E402
 from src.db.connection import get_conn, init_db  # noqa: E402
-from src.ui import backfill_tab, chat_tab, devtools_tab, organizer_tab  # noqa: E402
+from src.ui import backfill_tab, chat_tab, devtools_tab, organizer_tab, trends_tab  # noqa: E402
 
 st.set_page_config(page_title="Powerlifting Coach", page_icon="🏋️", layout="wide")
 
@@ -51,11 +51,13 @@ conn, graph = _resources()
 
 st.title("🏋️ Powerlifting Coach")
 
-tab_chat, tab_organizer, tab_backfill, tab_dev = st.tabs(
-    ["💬 Chat", "🗂️ Organizer", "📥 Backfill", "🛠️ Dev Tools"]
+tab_chat, tab_trends, tab_organizer, tab_backfill, tab_dev = st.tabs(
+    ["💬 Chat", "📈 Trends", "🗂️ Organizer", "📥 Backfill", "🛠️ Dev Tools"]
 )
 with tab_chat:
     chat_tab.render(conn, graph)
+with tab_trends:
+    trends_tab.render(conn)
 with tab_organizer:
     organizer_tab.render(conn)
 with tab_backfill:

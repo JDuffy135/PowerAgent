@@ -365,11 +365,14 @@ powerlifting-coach/
 │   ├── ingest/            # loaders, extraction prompts, Pydantic models
 │   ├── tools/             # typed query tools, vector search, sql escape hatch
 │   ├── agent/             # graph.py, nodes/, state.py, llm_provider.py
-│   └── cli.py             # entry point (chat REPL); UI comes later
+│   ├── ui/                # Streamlit app: tab veneers + streamlit-free logic
+│   └── cli.py             # terminal REPL alternative
 └── tests/                 # golden-file parser tests + tool unit tests
 ```
 
-UI roadmap: CLI REPL first → Streamlit/Gradio once graph logic is stable.
+UI: Streamlit (`streamlit run src/ui/app.py`), five tabs — Chat, Trends
+(time-series charts over the typed query tools), Organizer, Backfill, Dev
+Tools. The CLI REPL remains as the terminal alternative.
 
 ---
 

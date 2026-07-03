@@ -134,3 +134,4 @@ def test_tab_modules_import():
     import src.ui.chat_tab  # noqa: F401
     import src.ui.devtools_tab  # noqa: F401
     import src.ui.organizer_tab  # noqa: F401
+    import src.ui.trends_tab  # noqa: F401

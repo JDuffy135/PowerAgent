@@ -1,7 +1,8 @@
-# Implementation Roadmap — Remaining Work (Stages 4–9)
+# Implementation Roadmap — Remaining Work (Stages 4–11)
 
-Master plan for finishing the Powerlifting Coach per `ARCHITECTURE.md`. Steps 1–3
-are **done** (67 tests passing as of 2026-07-02):
+Master plan for finishing the Powerlifting Coach per `ARCHITECTURE.md`. Stages
+4–10 are **done** (253 tests passing as of 2026-07-03); **Stage 11 is the
+remaining work.** Steps 1–3 were done first (67 tests passing as of 2026-07-02):
 
 - **Step 1 — data spine:** full SQLite schema, `resolve_exercise`/`add_exercise`,
   `get_best_set` / `get_lifts` / `get_e1rm_trend` / `get_bodyweight_trend`, seeder
@@ -34,7 +35,7 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_9.md` (the current handoff) for current state,
+`HANDOFF_STEP_10.md` (the current handoff) for current state,
 and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
@@ -109,7 +110,7 @@ the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
 
 **Status:** implemented. 141 tests passing (107 prior + 34 new). See
-`HANDOFF_STEP_9.md` (the current handoff) for the full writeup and the
+`HANDOFF_STEP_10.md` (the current handoff) for the full writeup and the
 "LangGraph agent core + CLI"
 section of `README.md` for usage. All five open decisions resolved — see the
 "Decisions" section below, now recording the final calls.
@@ -190,7 +191,7 @@ left clean scaffolding). The code volume is moderate, but making a *local Qwen3
 benefits from stronger judgment.
 
 **Status:** implemented. 161 tests passing (141 prior + 20 new). See
-`HANDOFF_STEP_9.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
+`HANDOFF_STEP_10.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
 UPDATE_STATS (Step 6)" section of `README.md` for usage. All four open decisions
 resolved — see the "✅ Decisions" section below, now recording the final calls.
 
@@ -252,7 +253,7 @@ stage is in the GENERATE system prompt, and drafting/iterating that prompt is
 where opus + medium pays for itself. Recommendation: opus + medium.
 
 **Status:** implemented. 171 tests passing (161 prior + 10 net new). See
-`HANDOFF_STEP_9.md` for the full writeup and the "GENERATE (program writer) +
+`HANDOFF_STEP_10.md` for the full writeup and the "GENERATE (program writer) +
 cloud offload (Step 7)" section of `README.md` for usage. All four open
 decisions resolved — see the "✅ Decisions" section below, now recording the
 final calls.
@@ -321,7 +322,7 @@ established pipeline shape. Independent of Stages 5–7; can run any time after
 Stage 3 (only `search_knowledge` registration depends on Stage 6's tool wiring).
 
 **Status:** implemented. 198 tests passing (171 prior + 27 new). See
-`HANDOFF_STEP_9.md` for the full writeup and the "File loaders + knowledge base
+`HANDOFF_STEP_10.md` for the full writeup and the "File loaders + knowledge base
 (Step 8)" section of `README.md` for usage. All three open decisions resolved —
 see the "✅ Decisions" section below, now recording the final calls.
 
@@ -376,7 +377,7 @@ see the "✅ Decisions" section below, now recording the final calls.
 **Minimum effective model: sonnet + medium.**
 
 **Status:** implemented. 240 tests passing (198 prior + 42 new). See
-`HANDOFF_STEP_9.md` for the full writeup and the "Streamlit UI + backfill +
+`HANDOFF_STEP_10.md` for the full writeup and the "Streamlit UI + backfill +
 organizer + dev tools (Step 9)" section of `README.md` for usage. Built from
 the grab-bag: the Streamlit UI (`streamlit run src/ui/app.py` — chat with
 interrupt round-trips, organizer, backfill, and dev-tools tabs), the
@@ -420,6 +421,183 @@ Only start once the CLI flow is stable (§7 roadmap). Grab-bag, pick what matter
   to the LLM as a tool.
 - **Block reviews do NOT get their own ingestion path yet** (the second open
   decision): deferred; nothing writes `doc_type='block_review'|'form_cue'`.
+
+---
+
+## Stage 10 — Trends tab (UI graphs) ✅ DONE (2026-07-03)
+
+**Minimum effective model: sonnet + medium.** Pattern-following UI work — every
+query tool the tab needs already exists in `src/tools/queries.py`; the stage is
+Streamlit plumbing plus a testable chart-prep layer.
+
+**Status:** implemented. 253 tests passing (240 prior + 13 new). See
+`HANDOFF_STEP_10.md` for the full writeup and the "📈 Trends" section of
+`README.md` for usage. Built as scoped: `src/ui/trends_tab.py` (veneer) +
+streamlit-free `src/ui/trends.py` (chart prep, `tests/test_trends.py`), Altair
+layered charts, `MUSCLE_GROUPS` exported from `src/tools/queries.py`,
+registered as the second tab. The open default-date-range decision was resolved
+as **last 6 months** (`trends.DEFAULT_RANGE_MONTHS`).
+
+### Scope
+
+A fifth tab, **📈 Trends**, graphing over time: bodyweight, recorded 1RMs per
+lift, limb-circumference measurements, and volume (hard sets + tonnage) per
+muscle group or lift.
+
+1. **`src/ui/trends_tab.py`** — `render(conn)` following the organizer/backfill
+   veneer pattern. Four chart sections:
+   - **Bodyweight**: `get_bodyweight_trend(conn, date_from, date_to)` → line
+     chart of `BodyweightTrend.rows` (`date`, `weight_lb`); render
+     `first/last/delta/min/max` as `st.metric`s above the chart.
+   - **1RM per lift**: exercise selector (`SELECT exercise_id, name FROM
+     exercise ORDER BY name`; default-filter to `tier IN
+     ('competition','variation')` with a "show all exercises" toggle) → a
+     **layered Altair chart**: `get_e1rm_trend(...)` as the line (week/block
+     bucket toggle) with `get_prs(exercise=...)` as scatter points on top;
+     tooltips show the e1RM source set and PR context.
+   - **Measurements**: site multi-select (`SELECT DISTINCT site FROM
+     measurement`) → `get_measurements(site, date_from, date_to)` line chart of
+     `value_in` over `date`, one series per selected site.
+   - **Volume**: selector accepting either a muscle group (the
+     `_MUSCLE_GROUPS` set in `src/tools/queries.py` — export it or add a public
+     accessor) or an exercise name → `get_volume_trend(...)`, which already
+     returns both `hard_sets` and `tonnage_lb` per bucket → show both (bar
+     chart of hard sets + tonnage chart; radio or side-by-side).
+   - Shared controls: global date-range `st.date_input` pair (see decisions
+     for default) and a week/block bucketing toggle where supported. Empty
+     ranges render `st.info`, never an exception; `ExerciseNotFound` handled
+     gracefully.
+2. **Streamlit-free helper module** (e.g. `src/ui/trends.py`): functions that
+   turn tool outputs into chart-ready DataFrames (bucket ordering, merging PR
+   points with e1RM buckets, muscle-group-vs-exercise input classification).
+   All decision-shaped logic lives here with unit tests; the tab module stays a
+   veneer with an import smoke test (extend `tests/test_ui.py`).
+3. **Register in `src/ui/app.py`**: import, add "📈 Trends" to the `st.tabs()`
+   tuple, add the `with` block calling `trends_tab.render(conn)`.
+4. **`pyproject.toml`**: add `altair>=5.0` explicitly (it's already a Streamlit
+   transitive dep — declare it since we now import it directly).
+5. Draft-program exclusion is already enforced inside the query tools — nothing
+   extra needed here.
+
+### Definition of done
+
+- `streamlit run src/ui/app.py` shows the Trends tab; all four chart groups
+  render against a seeded `data/sample.db`.
+- Chart-prep helpers unit-tested; no live models needed anywhere (pure SQL
+  tools). Existing tests stay green.
+- README + handoff doc updated.
+
+### ✅ Decisions (resolved by the user, 2026-07-03 — now locked in)
+
+- **Charting library: Altair** — already pulled in by Streamlit, and layered
+  charts (PR points over the e1RM line) need more control than
+  `st.line_chart` offers.
+- **1RM graphs: recorded PRs + e1RM overlay** — `pr` table entries as points
+  over the `get_e1rm_trend` line, so actual maxes and estimated strength
+  between tests read together.
+- **Volume: show both** hard-set count and tonnage (the tool already returns
+  both per bucket).
+
+- **Default date range: last 6 months** (resolved at implementation time;
+  `DEFAULT_RANGE_MONTHS = 6` in `src/ui/trends.py`).
+
+---
+
+## Stage 11 — Deferred polish: kg end-to-end, review/form-cue embedding, re-embed command
+
+**Minimum effective model: sonnet + high.** Three independent sub-tasks; 11a
+and 11c are mechanical, but 11b's chat path touches the HITL flow and deserves
+care.
+
+### 11a — `display_unit: kg` end-to-end
+
+Conversion helpers already exist in `src/agent/units.py` (`to_display_weight`,
+`format_weight`, `convert_weights`); SYNTHESIZE and UPDATE_STATS already apply
+them. Close the remaining gaps — **presentation only, lb stays canonical (§2)**:
+
+- `src/ingest/review.py::_fmt_weight` hardcodes "lb" — thread a `unit` param
+  through `render_batch`/`_render_set`/`_render_slot`; callers (ingest node,
+  backfill tab) pass the configured unit. Kg mode shows converted values while
+  committing canonical lb.
+- `src/agent/nodes/generate.py` draft rendering — convert `target_weight_lb`
+  display via `format_weight`.
+- **Trends tab** (Stage 10): unit toggle / config-driven axis conversion via
+  `to_display_weight` in the chart-prep helpers (bodyweight, e1RM/PR, tonnage;
+  measurements stay inches).
+- Organizer listings: convert any `_lb` columns surfaced.
+- Read `display_unit` from `config.yaml` in `src/ui/app.py` (config already
+  loads there) so tabs and graph state agree. **Dev Tools grid stays canonical
+  lb** — add a caption saying so.
+- Tests: renderer unit tests in both units; chart-prep conversion tests.
+
+### 11b — Block-review / form-cue embedding paths
+
+Nothing currently writes `program.review_text` / `block.review_text`
+(schema.sql defines both) or Chroma `doc_type='block_review'|'form_cue'`.
+Build both entry paths:
+
+- **Organizer UI**: text areas on the selected block/program in
+  `organizer_tab.py`, saving via new `src/tools/organize.py` functions
+  (`set_block_review`, `set_program_review`) that write `review_text` and
+  upsert to Chroma `personal_notes` following
+  `src/ingest/embed.py::embed_session_notes`'s idempotent pattern — ids
+  `block_review_<block_id>` / `program_review_<program_id>`, metadata
+  `doc_type='block_review'`, `block_id`, `date` (block end_date or today),
+  `session_id=0`. Long reviews chunked per section per §3.2 (chunk suffix in
+  the id); re-saving re-upserts so reviews stay editable.
+- **Chat path**: extend UPDATE_STATS (or a sibling branch — see decisions) to
+  detect "here's my block review…" / "form cue for squat: …", confirm via the
+  existing lightweight HITL interrupt, then write SQLite `review_text` (for
+  reviews) and embed with `doc_type='block_review'` or `'form_cue'`. Form cues
+  carry `exercises` metadata via `resolve_exercise`. Same
+  parse→confirm→write shape as UPDATE_STATS; stub-LLM tests.
+- `search_notes` (`src/tools/vector.py`) already filters `doc_type` natively —
+  no search-side changes; GENERATE's block-review retrieval starts working for
+  free.
+
+### 11c — Re-embedding command
+
+Chroma collections currently record nothing about the embedder (§3.2 says
+changing embedders requires re-embedding).
+
+- **Record the embedder**: when creating/getting collections, set collection
+  metadata `{"embedder": <model>}`; warn on mismatch at embed/search time
+  (best-effort, non-fatal).
+- **`reembed` command**: for each collection (`personal_notes`, `knowledge`),
+  page through `collection.get()` — documents + metadatas are all stored in
+  Chroma — re-embed the documents with the currently configured embedder
+  (`get_embedder()`), and build a **fresh collection fully before dropping the
+  old one** (build-then-swap, so a crash mid-run never loses data). Stamp the
+  new collection's metadata with the new embedder name.
+- No source-file re-parsing needed: re-embedding from stored `documents`
+  preserves analyses (Chroma-only) and knowledge chunks. Session notes are
+  also recoverable from `session.raw_note` as a fallback.
+- Tests with the fake embedder + in-memory Chroma client pattern
+  (`tests/ingest/test_embed.py`).
+
+### Definition of done
+
+- With `display_unit: kg`: HITL ingest/backfill reviews, generate drafts,
+  Trends charts, and organizer listings all render kg; DB values remain lb.
+- Block reviews and form cues writable from both the Organizer tab and chat;
+  retrievable via `search_notes(doc_type='block_review'|'form_cue')`.
+- `reembed` migrates both collections to a new embedder with document counts
+  preserved; collections carry embedder metadata.
+- Everything behind seams, no live models in tests; README + handoff updated.
+
+### ✅ Decisions (resolved by the user, 2026-07-03 — now locked in)
+
+- **Review/form-cue entry: both paths** — Organizer text areas *and* an
+  UPDATE_STATS-style chat path with HITL confirm.
+- **kg scope: all user-facing surfaces** (HITL review rendering, generate
+  drafts, Trends, organizer). Dev Tools raw grid excluded by design — it edits
+  canonical DB columns, and round-tripping kg invites rounding drift.
+
+### ⚠️ Decisions you need to make (or explicitly delegate)
+
+- **Chat-detection routing** for 11b: extend the `update_stats` intent to
+  cover reviews/cues, or add a new router intent?
+- **Re-embed surface**: CLI-only command, or also a Dev Tools button?
 
 ---
 

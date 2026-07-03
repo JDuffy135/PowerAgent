@@ -53,7 +53,7 @@ streamlit run src/ui/app.py
 
 This opens the coach in your browser. Your training data lives in
 `data/training.db`, which starts empty — you fill it by ingesting logs (below).
-The four tabs are walked through in [Using the app](#using-the-app).
+The five tabs are walked through in [Using the app](#using-the-app).
 
 > **Want to see it populated first?** Run `python -m src.seed` to build a
 > **separate** sample database (`data/sample.db`) with a realistic prep in it.
@@ -63,7 +63,7 @@ The four tabs are walked through in [Using the app](#using-the-app).
 
 ## Using the app
 
-The UI has four tabs.
+The UI has five tabs.
 
 ### 💬 Chat
 
@@ -97,6 +97,26 @@ the coach figures out what you want:
 what it will do. Click **✅ Approve** / **❌ Reject**, or type a correction in
 plain English ("the third set was 315 not 335", "these belong to Strength Block
 1") and it re-does the parse. Nothing durable is written until you approve.
+
+### 📈 Trends
+
+Your training at a glance — interactive time-series charts over everything the
+coach knows, filtered by a shared date range (defaults to the last 6 months):
+
+- **Bodyweight** — line chart plus first / last / change / min / max summary
+  numbers.
+- **1RM per lift** — pick a lift (main lifts by default, toggle to show
+  accessories): your weekly best **estimated 1RM** as a line, with **recorded
+  PRs** overlaid as points (true 1RMs by default; untick to include rep PRs).
+  Hover any point to see the exact set behind it. Bucket by block instead to
+  compare across mesocycles.
+- **Measurements** — limb-circumference / length sites over time, overlaid on
+  one chart.
+- **Volume** — hard sets and tonnage per week or per block, for a whole muscle
+  group or a single exercise.
+
+Draft programs never pollute these charts — only training you actually logged
+counts.
 
 ### 🗂️ Organizer
 
@@ -213,7 +233,7 @@ full picture.
 ## Development
 
 ```bash
-pytest        # 240 tests, in-memory SQLite seeded per test, no live models
+pytest        # 253 tests, in-memory SQLite seeded per test, no live models
 ```
 
 Project layout:
@@ -224,11 +244,10 @@ Project layout:
 | `src/tools/` | Typed query tools, semantic search, SQL escape hatch, organizer + admin ops |
 | `src/ingest/` | Loaders, LLM extraction, HITL staging/commit, embedding, knowledge base, backfill |
 | `src/agent/` | LangGraph graph, nodes (router/analyze/synthesize/generate/…), provider routing |
-| `src/ui/` | Streamlit app + tab modules (rendering) and streamlit-free logic (driver, editor diff) |
+| `src/ui/` | Streamlit app + tab modules (rendering) and streamlit-free logic (driver, editor diff, chart prep) |
 | `src/cli.py` | Terminal REPL |
 | `tests/` | Full suite; stubs/fakes for every model dependency |
 
-**Remaining optional polish** (see [`IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)):
-a full `display_unit: kg` pass through the UI, block-review / form-cue embedding
-paths, and a re-embedding command for swapping embedders. Additional UI features (such as graph
-visuals to show trends over time) will be added in future updates as well.
+**Remaining optional polish** (see [`IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)
+Stage 11): a full `display_unit: kg` pass through the UI, block-review /
+form-cue embedding paths, and a re-embedding command for swapping embedders.

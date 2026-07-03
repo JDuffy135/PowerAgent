@@ -407,6 +407,9 @@ _MUSCLE_GROUPS = {
     "posterior chain",
 }
 
+# Public, sorted view for UI selectors; the set above stays the membership test.
+MUSCLE_GROUPS: list[str] = sorted(_MUSCLE_GROUPS)
+
 
 def _latest_bodyweight(conn: sqlite3.Connection) -> float:
     """Most recent recorded bodyweight, 0.0 if none has ever been logged."""
