@@ -1,24 +1,43 @@
-# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph + UI (Steps 1–9)
+# Powerlifting Coach
 
-SQLite schema, exercise resolver, seed data, and four typed query tools
-(Step 1); the LLM extraction pipeline that turns raw log text into a
-schema-validated `ParsedBatch` (Step 2); the HITL staging + transactional
-commit path plus Chroma prose embedding (Step 3); the rest of the typed
-query tools plus Chroma semantic search and a gated read-only SQL escape hatch
-(Step 4); the LangGraph agent core — router, INGEST pipeline with
-interrupt-based HITL review (corrections + block assignment), SqliteSaver
-checkpointing, and a minimal CLI REPL (Step 5); the ANALYZE ReAct loop,
-SYNTHESIZE answer-writer (with unit conversion + a "store this analysis?"
-offer), and UPDATE_STATS confirm-before-write path (Step 6); and the GENERATE
-program writer (evidence-grounded structured drafts, HITL confirm, persisted
-as `draft` programs) plus the Anthropic cloud provider branch (Step 7); and the
-xlsx/pdf file loaders plus knowledge-base ingestion (`search_knowledge` over a
-Chroma `knowledge` collection) (Step 8); and the Streamlit UI (chat, organizer,
-backfill, dev tools), historical backfill pipeline, program/block organizer
-ops, and dev CRUD/backup/audit tooling (Step 9). See `ARCHITECTURE.md` for the
-full design and `HANDOFF_STEP_9.md` for the latest handoff.
+A local-first AI coach for your powerlifting training. Drop in your training
+logs (typed, `.txt`, `.xlsx`, or `.pdf`), and it parses them into a structured
+history you can then **ask questions about** ("what was my best bench in
+March?", "how's my deadlift e1RM trending this prep?"), **report stats to**
+("hit a 405 deadlift PR today"), and **get new programs from** (evidence-grounded
+training blocks written around your own history and philosophy). It also ingests
+reference material — studies, articles, transcripts — so the coach can pull real
+theory into its reasoning.
 
-## Setup
+Everything runs on your machine: SQLite for your numbers, a local vector store
+for your notes, and local LLMs via [Ollama](https://ollama.com). Nothing about
+your training leaves your computer unless you explicitly flip a node to a cloud
+model. Every write to your training history is **reviewed by you before it's
+saved** — the coach proposes, you approve.
+
+---
+
+## Quick start
+
+### 1. Prerequisites
+
+- **Python 3.11+**
+- **[Ollama](https://ollama.com)** running locally, with the default models
+  pulled:
+  ```bash
+  ollama pull qwen3:14b          # routing, extraction, chitchat, stat parsing
+  ollama pull qwen3.6:35b-a3b    # analysis + answer writing
+  ollama pull nomic-embed-text   # embeddings for semantic note/knowledge search
+  ```
+- **(Optional) An Anthropic API key** — program generation defaults to the
+  cloud (`claude-sonnet-5`) because it's the heaviest reasoning in the app. Set
+  it before launching, or switch that node to local (see
+  [Configuration](#configuration)):
+  ```bash
+  export ANTHROPIC_API_KEY=sk-ant-...
+  ```
+
+### 2. Install
 
 ```bash
 python3 -m venv .venv
@@ -26,393 +45,190 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## Seeding
-
-```bash
-python -m src.seed
-```
-
-Builds `data/sample.db` from scratch. Idempotent via wipe-and-reload: every
-run deletes all rows from every table, then re-inserts the sample dataset —
-so running it repeatedly always leaves the DB in the same state.
-
-The seeder targets **`data/sample.db`, never `data/training.db`.**
-`training.db` is the live database the HITL commit path writes real,
-user-approved logs into; keeping the wipe-and-reload sample data in a separate
-file makes re-seeding safe by construction.
-
-## Tests
-
-```bash
-pytest
-```
-
-Tests run against an in-memory SQLite DB seeded fresh per test (see
-`tests/conftest.py`).
-
-## Query tool usage
-
-All tools take a `conn` plus validated params and return Pydantic models.
-Exercise names are resolved via `resolve_exercise` (exact alias → fuzzy
-match → `ExerciseNotFound`). Draft programs are excluded from every tool.
-
-```python
-from src.db.connection import get_conn
-from src.tools.queries import (
-    get_best_set,
-    get_lifts,
-    get_e1rm_trend,
-    get_bodyweight_trend,
-)
-
-conn = get_conn("data/training.db")
-
-# Heaviest bench in March 2026
-get_best_set(conn, "bench press", "2026-03-01", "2026-03-31")
-# -> BestSetResult(exercise='Bench Press', weight_lb=230.0, reps=1, date='2026-03-19', ...)
-
-# All deadlift top singles across the whole log
-get_lifts(conn, "deadlift", "2026-01-01", "2026-06-30", top_sets_only=True)
-# -> [SessionLifts(session_id=..., date='2026-04-02', sets=[...]), SessionLifts(..., date='2026-06-01', ...)]
-
-# Weekly e1RM trend for deadlift
-get_e1rm_trend(conn, "deadlift", "2026-01-01", "2026-06-30", by="week")
-# -> [E1RMPoint(bucket='2026-W14', e1rm=357.3, source_weight_lb=335.0, source_reps=2, ...),
-#     E1RMPoint(bucket='2026-W23', e1rm=397.8, source_weight_lb=385.0, source_reps=1, ...)]
-
-# Bodyweight trend for the whole prep
-get_bodyweight_trend(conn, "2026-01-01", "2026-06-30")
-# -> BodyweightTrend(rows=[...], first=138.0, last=146.0, delta=8.0, min=138.0, max=146.0)
-```
-
-You can also run the demo block directly:
-
-```bash
-python -m src.tools.queries
-```
-
-## Ingestion pipeline (Step 2)
-
-```python
-from src.ingest.loaders import parse_upload
-from src.ingest.extract import extract_training_data
-
-text = parse_upload("some_log.txt")
-batch = extract_training_data(text, conn=conn)  # conn optional, read-only exercise resolution
-```
-
-- `src/ingest/models.py` — `ParsedBatch` (sessions → sets/cardio/programmed_slots,
-  plus `new_exercise_candidates` for names that didn't resolve).
-- `src/ingest/loaders.py` — `parse_upload(path)`; `.txt` supported now, `.xlsx`/`.pdf` raise
-  `NotImplementedError` (stubbed for a later step).
-- `src/ingest/extract.py` — `extract_training_data(text, conn=None, llm=None)`. `get_llm(node)`
-  is the provider seam (`config.yaml` → `nodes.<node>`): local Ollama (Qwen3 14B, structured
-  JSON output) by default, cloud-flippable later. Pure w.r.t. the DB — `conn` is only used
-  read-only via `resolve_exercise`; nothing is written or committed here (that's Step 3).
-- `tests/ingest/` — golden-file tests. Since there's no live model in this environment, tests
-  inject a stub `llm` callable that returns each fixture's golden JSON, exercising the real
-  parse→validate→resolve pipeline without depending on a running Ollama server.
-
-## HITL staging + commit path (Step 3)
-
-Parsing produces a `ParsedBatch`; nothing durable happens until the user
-approves. That bridge lives in `src/ingest/`:
-
-```python
-from src.ingest.extract import extract_training_data
-from src.ingest.stage import stage_batch, get_pending_batch
-from src.ingest.review import render_batch
-from src.ingest.commit import commit_batch, reject_batch
-
-batch = extract_training_data(text, conn=conn)      # Step 2
-batch_id = stage_batch(conn, batch, source_file="log.txt")  # -> ingest_batch(pending_review)
-
-print(render_batch(get_pending_batch(conn, batch_id)))      # readable HITL summary
-
-commit_batch(conn, batch_id)                        # transactional SQLite + Chroma embed
-# or: reject_batch(conn, batch_id)                  # writes nothing
-```
-
-- `stage.py` — `stage_batch` writes the `pending_review` audit-trail row (the
-  serialized batch JSON, no training data); `get_pending_batch` rehydrates it.
-- `review.py` — `render_batch(parsed) -> str`, a pure summary with every
-  `confidence < 1.0` field flagged. This is what Step 4's `interrupt()` shows.
-- `commit.py` — `commit_batch(conn, batch_id)` is **transactional**: it
-  resolves/creates exercises (`add_exercise(commit=False)`), inserts
-  `session`/`lift_set`/`cardio` rows, and flips the batch to `committed`, all in
-  one transaction — a mid-commit failure rolls everything back. Committing an
-  already-committed batch is a no-op; `reject_batch` is the terminal
-  `rejected` transition. Programmed slots are preserved in the audit JSON but
-  not inserted yet (they need block assignment, a later step).
-- `embed.py` — session `raw_note` prose is embedded into the Chroma
-  `personal_notes` collection (persistent client at `data/chroma/`) as part of
-  commit. `get_embedder()` / `get_chroma_client()` are seams (like `get_llm`):
-  tests inject a deterministic fake embedder + in-memory client, so no live
-  Ollama/`nomic-embed-text` is required. Pass `commit_batch(..., embed_prose=False)`
-  to skip Chroma.
-
-## Full tool layer (Step 4)
-
-The rest of ARCHITECTURE.md §5.1's typed tools, plus the vector-search and SQL
-escape-hatch tools from §3.2/§5.2:
-
-```python
-from src.tools.queries import (
-    get_sessions, get_frequency, get_volume_trend, get_prs, find_recent_prs,
-    commit_prs, get_injuries, get_measurements, get_programs, get_block_outline,
-    compare_programmed_vs_actual,
-)
-from src.tools.vector import search_notes
-from src.tools.sql import run_readonly_sql
-```
-
-- `get_volume_trend(exercise_or_muscle_group, date_from, date_to, by='week'|'block')`
-  returns both hard-set count and tonnage (lb) per bucket. Bodyweight-only sets
-  (`weight_lb IS NULL`) estimate load using the user's most recently logged
-  bodyweight (0 lb if none has ever been recorded) — NOT the bodyweight as of
-  that specific date, the single latest entry in the table.
-- `get_prs` reads only the manually-recorded `pr` table. `find_recent_prs(date_from,
-  date_to, exercise=None)` is a separate, read-only tool that auto-derives PR
-  candidates (sets whose Epley e1RM beats every prior set for that exercise,
-  all-time) without writing anything; pass user-accepted candidates to
-  `commit_prs(conn, candidates)` to insert them (idempotent — re-accepting a
-  candidate already in `pr` is a no-op).
-- `compare_programmed_vs_actual(block_id, exercise=None)` joins `programmed_slot`
-  to performed `lift_set` rows by `(week_number, day_number, exercise_id)`.
-  Mismatches are surfaced, never silently dropped: a programmed slot with no
-  matching session still appears in `rows` with `actual_*` fields `None`;
-  performed work with no matching slot appears in `unmatched_actual` (with its
-  session's `raw_note`); a block with zero `programmed_slot` rows returns
-  `rows=[]` plus a `note` explaining nothing was programmed, while still
-  surfacing `unmatched_actual`.
-- `search_notes(query, date_from=None, date_to=None, exercises=None, doc_type=None)`
-  — semantic search over the `personal_notes` Chroma collection. **At least one
-  metadata filter is required** (raises `ValueError` otherwise, per
-  ARCHITECTURE.md §3.2). Date filtering uses a numeric `date_ordinal` metadata
-  mirror of the display `date` string (Chroma's `$gte`/`$lte` require int/float
-  operands); `exercises` filtering is client-side substring containment since
-  Chroma stores the mentioned-exercises list as a comma-joined string.
-- `run_readonly_sql(conn, query, max_rows=200, timeout_s=5.0)` — the gated
-  escape hatch. Validates the query is a single `SELECT` via `sqlglot`
-  (rejects multi-statement input and any non-SELECT), runs it under
-  `PRAGMA query_only=ON` (always restored after, even on error), and caps rows
-  via an outer `LIMIT`.
-
-## LangGraph agent core + CLI (Step 5)
-
-```bash
-python -m src.cli
-```
-
-Starts a chat REPL over the agent graph (requires a live Ollama server for
-routing/extraction/chitchat). `/ingest <path>` ingests a `.txt` training log:
-the parse is staged and shown for review — reply `approve`, `reject`, or
-describe corrections in plain text (a correction LLM re-emits the full batch;
-capped at 5 rounds). On approval you're asked which program/block the batch
-belongs to: an existing block id, `new <program> / <block>` (created on the
-fly, which also unlocks `programmed_slot` insertion), or `none` to leave it
-unattached and organize later. Nothing durable is written before approval.
-
-Key modules: `src/agent/llm_provider.py` (per-node model routing —
-`get_chat_model` returns a `ChatOllama`; cloud providers raise until Stage 7),
-`src/agent/state.py`, `src/agent/nodes/{router,ingest,chitchat}.py`,
-`src/agent/graph.py` (topology + `SqliteSaver` checkpointer in a separate
-`data/checkpoints.db`), `src/ingest/correct.py` (HITL correction pass),
-`src/cli.py`. All graph paths are covered by stub-LLM tests
-(`tests/agent/`) — no live model needed for the suite.
-
-## ANALYZE + SYNTHESIZE + UPDATE_STATS (Step 6)
-
-Plain questions and stat reports are now handled end-to-end in the same REPL:
-
-```text
-you> what was my best bench in March?
-coach> Your best March bench was 230 lb x1 on 2026-03-19.
-Store this analysis to your notes for future reference? (yes/no)
-review> no
-
-you> bodyweight was 146 this morning
-Record this? bodyweight 146 lb on 2026-07-02. Reply `yes` to save or `no` to discard.
-review> yes
-coach> Recorded bodyweight 146 lb on 2026-07-02.
-```
-
-- **ANALYZE** (`src/agent/nodes/analyze.py`) is a bounded ReAct loop
-  (`MAX_TOOL_CALLS = 8`) over the Step 1/4 query tools, wrapped as LangChain
-  tools in `src/agent/tools.py` (tight, enum/date-typed schemas;
-  `ExerciseNotFound` returned as `{"error": ...}` so the model can recover). It
-  accumulates structured `evidence`; the ReAct scratch (tool calls/results)
-  stays local to the node so the durable message history stays clean. Hitting
-  the cap sets `evidence_truncated`.
-- **SYNTHESIZE** (`src/agent/nodes/synthesize.py`) composes the final answer
-  from `evidence`. It is the **only** place weights are converted from canonical
-  lb to the user's `display_unit` (`src/agent/units.py`). On overflow it appends
-  a fixed disclaimer that asks the user to narrow scope. It then offers to store
-  the analysis; on `yes` the text is embedded into Chroma `personal_notes` under
-  `doc_type='analysis'` (`embed_analysis`).
-- **UPDATE_STATS** (`src/agent/nodes/update_stats.py`) parses one reported
-  bodyweight or PR (weight normalized to lb), then confirms before writing via
-  `interrupt()`; the durable inserts live in `src/tools/stats.py`. Unknown PR
-  exercises and out-of-scope reports (injuries/measurements) are declined
-  without an interrupt.
-
-All of it is covered by scripted-stub tests (`tests/agent/test_graph_analyze.py`,
-`test_graph_update_stats.py`, `test_units.py`, `tests/test_stats.py`) — the
-tool-calling stub drives real tools against the seeded DB, no live model.
-
-## GENERATE (program writer) + cloud offload (Step 7)
-
-```text
-you> write me a 4-week strength block based on this prep
-coach> # Draft: 2026 Meet 2 Prep :: Strength Block 1 (focus: strength, 4 week(s))
-...
-## Week 1, Day 1 (w1d1)
-- Bench Press: 1x1 @ RPE 6, 4x4 @ RPE 7 @ ~225 lb
-...
-Save this as a draft program? It stays out of all analysis until started. Reply `yes` to save or `no` to discard.
-review> yes
-coach> Saved draft program '2026 Meet 2 Prep' (program id 3, block id 5, 96 programmed slot(s), status 'draft' — excluded from analysis until started).
-```
-
-- **GENERATE** (`src/agent/nodes/generate.py`) runs in two phases inside one
-  node: a bounded ReAct loop over the same tools ANALYZE uses (e1RM trends,
-  volume, **active injuries**, block outlines, programmed-vs-actual, note
-  search), then a structured-output draft call producing a `DraftProgram` —
-  Pydantic models mirroring `ParsedProgrammedSlot`, so slots are
-  machine-insertable. The rendered draft prints, then `generate_confirm`
-  interrupts; on `yes`, `src/tools/draft.py::persist_draft` writes
-  `program(status='draft')` + `block` + `programmed_slot` rows in one
-  transaction (slot exercises resolve best-effort; unresolved names are
-  flagged). Draft exclusion keeps saved drafts out of analysis; they're visible
-  via `get_programs('draft')` / `get_block_outline`.
-- **Guardrails**: the user's training philosophy (4-week ramping-RPE SBD waves,
-  weak-point variations outside peaking blocks, 4-5 days/week, injury
-  workarounds, starting-volume defaults) is encoded in
-  `generate.TRAINING_PHILOSOPHY` and injected into both GENERATE prompts.
-- **Cloud provider branch** (`provider: cloud` in `config.yaml`): the Anthropic
-  API, default model `claude-sonnet-5`. `get_chat_model` returns a
-  `ChatAnthropic`; the raw `get_llm` seam calls the `anthropic` SDK with the
-  target JSON schema embedded in the system prompt (downstream Pydantic
-  validation stays the contract, as on the Ollama path). The API key comes from
-  the env var named by `nodes.<node>.api_key_env` (default `ANTHROPIC_API_KEY`)
-  and is **never required when `provider: local`**. GENERATE defaults to cloud;
-  flipping it back to local is a config edit.
-
-Covered by scripted-stub tests (`tests/agent/test_graph_generate.py`) and
-fake-transport cloud provider tests (`tests/ingest/test_get_llm.py`,
-`tests/agent/test_llm_provider.py`) — no real API calls in CI.
-
-## File loaders + knowledge base (Step 8)
-
-`parse_upload` now loads `.xlsx` (openpyxl) and `.pdf` (pypdf) alongside `.txt`,
-feeding the same `extract_training_data` pipeline:
-
-```python
-from src.ingest.loaders import parse_upload
-parse_upload("logs/block1.xlsx")   # one text block per sheet, header + tab-joined rows
-parse_upload("logs/meet.pdf")      # one text block per page
-```
-
-**No structural assumptions** are made about a workbook's layout — every coach's
-sheet looks different, so the loader emits the raw grid verbatim (blank
-rows/columns dropped) and lets the LLM extractor figure out the shape. Cell text
-is preserved uncleaned (mixed lb/kg, pin settings, emoji) — that mess is exactly
-what the extractor is built for.
-
-Reference material (studies, articles, PDFs, transcripts) goes into the Chroma
-`knowledge` collection via a **direct embed path — no HITL** (it isn't training
-data):
-
-```text
-you> /learn studies/rpe_autoregulation.pdf --topic RPE --author "Helms et al" --year 2018
-coach> learned studies/rpe_autoregulation.pdf (4 chunks embedded into the knowledge base).
-```
-
-- **Chunker** (`src/ingest/knowledge.py::chunk_text`): character-approximation of
-  a token chunker (~4 chars/token → ~650-token chunks at ~15% overlap), so no
-  tokenizer dependency.
-- **Metadata is flags-first**: any of `--source/--title/--topic/--author/--year`
-  you pass wins; a small LLM pass guesses whichever you omit from the document
-  text, and anything still unknown defaults to NULL.
-- **`search_knowledge(query, topic=None)`** (`src/tools/vector.py`) does
-  similarity search over the collection — unscoped is allowed here (unlike
-  `search_notes`), since reference material isn't time-windowed personal history.
-  It's registered as `search_knowledge_base` in `make_analyze_tools`, so both
-  ANALYZE and GENERATE can pull external theory into their reasoning.
-
-Covered by loader golden-file tests (`tests/ingest/test_loaders.py`), chunker +
-ingestion round-trip tests (`tests/ingest/test_knowledge.py`), `search_knowledge`
-tests (`tests/test_vector.py`), and `/learn` parsing/handler tests
-(`tests/test_cli.py`) — all with the fake embedder + in-memory Chroma, no live
-model.
-
-## Streamlit UI + backfill + organizer + dev tools (Step 9)
+### 3. Run the app
 
 ```bash
 streamlit run src/ui/app.py
 ```
 
-Same graph, DB, and checkpointer as the CLI — only the front-end changes. Four
-tabs:
+This opens the coach in your browser. Your training data lives in
+`data/training.db`, which starts empty — you fill it by ingesting logs (below).
+The four tabs are walked through in [Using the app](#using-the-app).
 
-- **💬 Chat** — the REPL in a browser. Interrupts (ingest review, stat/draft
-  confirms) render inline with ✅/❌ quick-reply buttons (`yes`/`no`, which every
-  confirm parser accepts) plus free text for corrections and block picks. The
-  sidebar file uploader replaces `/ingest <path>` and `/learn <path>`: a
-  training log goes through the normal HITL review; reference material embeds
-  straight into the knowledge base.
-- **🗂️ Organizer** (`src/tools/organize.py`) — fix ingest-time assignment
-  mistakes after the fact: reattach sessions to a different block (or detach
-  them), rename/merge/move programs and blocks, and **start a draft** (flip a
-  GENERATE-saved `draft` program to `incomplete` with a start date so it counts
-  in analysis).
-- **📥 Backfill** (`src/ingest/backfill.py`) — paste (or upload) years of
-  training history at once. `split_archive` cuts it into extraction-sized
-  chunks along session boundaries (date/week-label lines, blank-line gaps —
-  never mid-session), and each chunk runs through the same
-  extract → stage → commit pipeline. Two modes:
-  - *Stage for review* (default): every chunk lands `pending_review`; a
-    per-batch list below renders each one with commit/reject buttons and an
-    optional block attachment.
-  - *Commit everything*: relaxed bulk HITL — the run button is the one explicit
-    approval for the whole archive; every chunk still gets an `ingest_batch`
-    audit row, and a failed chunk is isolated, never aborting the run.
-- **🛠️ Dev Tools** (`src/tools/admin.py`) — a `st.data_editor` grid over any
-  allowlisted domain table with add/edit/delete applied via a diff
-  (`src/ui/editing.py`); one-click consistent DB backup (SQLite online backup
-  API → `data/backups/`); and the ingest-batch audit browser (status filter +
-  pretty-printed `parsed_json`). This surface deliberately bypasses the agent's
-  HITL flow — every write is an explicit hand edit — and it is *not* exposed to
-  the LLM as a tool.
+> **Want to see it populated first?** Run `python -m src.seed` to build a
+> **separate** sample database (`data/sample.db`) with a realistic prep in it.
+> The seeder never touches your live `training.db`.
 
-The chat turn driver (`src/ui/driver.py`) and editor diff are streamlit-free
-and unit-tested; the `*_tab.py` modules are thin rendering veneers. Covered by
-`tests/test_organize.py`, `tests/test_admin.py`, `tests/ingest/test_backfill.py`,
-and `tests/test_ui.py` — no live models, no browser needed.
+---
 
-## What's here vs. what's not
+## Using the app
 
-Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
-`src/tools/queries.py`, `src/seed.py` (Step 1); `src/ingest/models.py`,
-`src/ingest/loaders.py`, `src/ingest/extract.py` (Step 2); `src/ingest/stage.py`,
-`src/ingest/review.py`, `src/ingest/commit.py`, `src/ingest/embed.py` (Step 3);
-the rest of `src/tools/queries.py`, `src/tools/vector.py`, `src/tools/sql.py`
-(Step 4); `src/agent/` (graph, router, INGEST HITL flow, provider),
-`src/ingest/correct.py`, `src/cli.py` (Step 5); the ANALYZE ReAct loop
-(`src/agent/nodes/analyze.py`, `src/agent/tools.py`), SYNTHESIZE +
-"store this analysis?" (`src/agent/nodes/synthesize.py`, `src/agent/units.py`,
-`embed_analysis`), and UPDATE_STATS (`src/agent/nodes/update_stats.py`,
-`src/tools/stats.py`) (Step 6); GENERATE + draft persistence + the Anthropic
-cloud provider branch (`src/agent/nodes/generate.py`, `src/tools/draft.py`,
-cloud branches in `src/ingest/extract.py` / `src/agent/llm_provider.py`)
-(Step 7); xlsx/pdf loaders and knowledge-base ingestion + `search_knowledge`
-(`src/ingest/loaders.py`, `src/ingest/knowledge.py`, `search_knowledge` in
-`src/tools/vector.py`, `/learn` in `src/cli.py`) (Step 8); the Streamlit UI,
-organizer ops, backfill pipeline, and dev tooling (`src/ui/`,
-`src/tools/organize.py`, `src/tools/admin.py`, `src/ingest/backfill.py`)
-(Step 9); full pytest coverage throughout (240 tests).
+The UI has four tabs.
 
-Remaining optional polish (per `IMPLEMENTATION_ROADMAP.md` Stage 9 grab-bag):
-the `display_unit: kg` end-to-end pass, block-review / form-cue embedding paths
-(`doc_type='block_review'|'form_cue'` exist in the design but nothing writes
-them yet), and a re-embedding command for embedder swaps.
+### 💬 Chat
+
+The main workspace — a chat window over your whole training history. Just type;
+the coach figures out what you want:
+
+- **Ask about your history** — "best bench in March?", "deadlift e1RM trend this
+  prep", "any knee-pain mentions in the last two blocks?" The coach queries your
+  data, answers with the actual numbers, and offers to save noteworthy analyses
+  to your notes.
+- **Report a stat** — "bodyweight 146 this morning", "hit a 405x1 deadlift PR".
+  It shows you what it's about to record and waits for your **yes/no** before
+  writing.
+- **Ask for a program** — "write me a 4-week strength block based on this prep".
+  It studies your history and drafts a full block; you review it and choose to
+  save it as a draft (drafts stay out of analysis until you start them) or
+  discard it.
+- **Just chat** — general training talk.
+
+**Adding files** — use the sidebar uploader for a `.txt`, `.xlsx`, or `.pdf`:
+
+- *Ingest as training log* runs it through review (see below) before anything is
+  saved.
+- *Add to knowledge base* embeds reference material (a study, an article)
+  directly so the coach can cite it later — no review, since it isn't your
+  training data. Any metadata you don't fill in (title, author, year, topic) is
+  guessed from the document.
+
+**Review before save** — whenever the coach is about to write to your history
+(a parsed log, a reported stat, a new draft), it pauses and shows you exactly
+what it will do. Click **✅ Approve** / **❌ Reject**, or type a correction in
+plain English ("the third set was 315 not 335", "these belong to Strength Block
+1") and it re-does the parse. Nothing durable is written until you approve.
+
+### 🗂️ Organizer
+
+Fix how your training is organized after the fact, so getting block assignment
+perfect at ingest time never matters:
+
+- **Reattach sessions** to a different block, or detach them entirely.
+- **Rename, merge, or move** programs and blocks (e.g. fold a mistakenly-split
+  block back together, or move a block to another program).
+- **Start a draft** — flip a program the coach drafted from `draft` to active
+  (with a start date) so its sessions start counting in your analysis.
+
+Every action is a single button; the tables above show live counts so you can
+see what you're working with.
+
+### 📥 Backfill
+
+For loading a lot of history at once — paste (or upload) months or years of
+training in one go. The app splits it into chunks along session boundaries and
+runs each through the same parse-and-review pipeline. Two modes:
+
+- **Stage for review** *(default)* — every chunk is queued as a pending batch;
+  you review and commit each one below, attaching it to a block if you like.
+  Same careful review as single-file ingest, just batched.
+- **Commit everything** — the trusted-bulk path: one click ingests the whole
+  archive at once. Each chunk is still recorded in the audit trail, and a chunk
+  that fails to parse is skipped rather than aborting the run.
+
+### 🛠️ Dev Tools
+
+Direct maintenance access to the database, outside the coach's review flow:
+
+- **Edit any table directly** — an editable grid where you can add rows, fix
+  cells, or delete rows, then apply the changes. Useful for one-off corrections.
+- **Back up the database** — one click writes a consistent snapshot to
+  `data/backups/`.
+- **Browse the ingestion audit trail** — every upload ever staged, with its
+  status (pending / committed / rejected) and the parsed data it produced.
+
+---
+
+## Configuration
+
+Model routing lives in [`config.yaml`](config.yaml). Each stage of the app
+(routing, extraction, analysis, program generation, embeddings…) picks its model
+independently, so you can tune cost/quality per task or move a single node to
+the cloud without touching code:
+
+```yaml
+nodes:
+  analyze:
+    provider: local          # 'local' (Ollama) or 'cloud' (Anthropic)
+    model: qwen3.6:35b-a3b
+    host: http://localhost:11434
+  generate:
+    provider: cloud          # program writing defaults to cloud
+    model: claude-sonnet-5
+    api_key_env: ANTHROPIC_API_KEY
+```
+
+- To run **fully offline**, set `generate.provider: local` (and give it a local
+  model + host). An API key is **never required** while every node is `local`.
+- `display_unit: lb` — weights are stored canonically in pounds and only
+  converted for display. Set to `kg` to show kilos.
+- `db_path`, `chroma_path`, `checkpoints_db` — where your data lives.
+
+---
+
+## Command-line alternative
+
+The same coach is available as a terminal REPL, if you prefer it to the browser:
+
+```bash
+python -m src.cli
+```
+
+`/ingest <path>` stages a training log for review; `/learn <path> [--topic ...]`
+adds reference material; anything else is chat. The review round-trip works the
+same way — approve, reject, or type corrections.
+
+---
+
+## How it works
+
+A brief tour of the design; see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the
+full picture.
+
+- **Hybrid storage.** Structured numbers (sessions, sets, PRs, bodyweight,
+  programs) live in **SQLite**; prose (session notes, saved analyses, reference
+  material) lives in a **Chroma** vector store for semantic search. Quantitative
+  questions hit typed SQL tools; "did I ever mention…" questions hit similarity
+  search.
+- **Agent graph.** A [LangGraph](https://langchain-ai.github.io/langgraph/)
+  state machine routes each message to one of five paths — ingest, analyze,
+  generate, update-stats, or chat. Analysis and generation are bounded **ReAct
+  loops** over a set of typed query tools (best set, e1RM trend, volume,
+  frequency, PRs, injuries, programmed-vs-actual, note/knowledge search), so
+  every claim is backed by a real query, not a guess.
+- **Human-in-the-loop by construction.** Nothing reaches your training tables
+  without passing through an `interrupt()` you approve. The graph checkpoints to
+  SQLite, so a review can span page reloads. (The Dev Tools tab and bulk-commit
+  backfill are the two explicit exceptions — hand edits you're making
+  deliberately.)
+- **Extraction pipeline.** Raw log text → a schema-validated `ParsedBatch` (via
+  a local LLM) → a staged, confidence-flagged review → a transactional commit.
+  Loaders handle `.txt`, `.xlsx` (one block per sheet, no layout assumptions),
+  and `.pdf` (one block per page).
+- **Provider seams.** Every LLM / embedder / vector-store dependency sits behind
+  an injectable factory, which is what lets the whole thing be tested with
+  stubs and in-memory stores — no live models in the test suite.
+
+---
+
+## Development
+
+```bash
+pytest        # 240 tests, in-memory SQLite seeded per test, no live models
+```
+
+Project layout:
+
+| Path | What's there |
+|------|--------------|
+| `src/db/` | SQLite schema + connection helpers |
+| `src/tools/` | Typed query tools, semantic search, SQL escape hatch, organizer + admin ops |
+| `src/ingest/` | Loaders, LLM extraction, HITL staging/commit, embedding, knowledge base, backfill |
+| `src/agent/` | LangGraph graph, nodes (router/analyze/synthesize/generate/…), provider routing |
+| `src/ui/` | Streamlit app + tab modules (rendering) and streamlit-free logic (driver, editor diff) |
+| `src/cli.py` | Terminal REPL |
+| `tests/` | Full suite; stubs/fakes for every model dependency |
+
+**Remaining optional polish** (see [`IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)):
+a full `display_unit: kg` pass through the UI, block-review / form-cue embedding
+paths, and a re-embedding command for swapping embedders. Additional UI features (such as graph
+visuals to show trends over time) will be added in future updates as well.
