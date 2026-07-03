@@ -1,4 +1,4 @@
-# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph (Steps 1–8)
+# Powerlifting Coach — Data Foundation + Ingestion + Tools + Agent Graph + UI (Steps 1–9)
 
 SQLite schema, exercise resolver, seed data, and four typed query tools
 (Step 1); the LLM extraction pipeline that turns raw log text into a
@@ -13,8 +13,10 @@ offer), and UPDATE_STATS confirm-before-write path (Step 6); and the GENERATE
 program writer (evidence-grounded structured drafts, HITL confirm, persisted
 as `draft` programs) plus the Anthropic cloud provider branch (Step 7); and the
 xlsx/pdf file loaders plus knowledge-base ingestion (`search_knowledge` over a
-Chroma `knowledge` collection) (Step 8). See `ARCHITECTURE.md` for the full
-design and `HANDOFF_STEP_8.md` for the latest handoff.
+Chroma `knowledge` collection) (Step 8); and the Streamlit UI (chat, organizer,
+backfill, dev tools), historical backfill pipeline, program/block organizer
+ops, and dev CRUD/backup/audit tooling (Step 9). See `ARCHITECTURE.md` for the
+full design and `HANDOFF_STEP_9.md` for the latest handoff.
 
 ## Setup
 
@@ -344,6 +346,50 @@ tests (`tests/test_vector.py`), and `/learn` parsing/handler tests
 (`tests/test_cli.py`) — all with the fake embedder + in-memory Chroma, no live
 model.
 
+## Streamlit UI + backfill + organizer + dev tools (Step 9)
+
+```bash
+streamlit run src/ui/app.py
+```
+
+Same graph, DB, and checkpointer as the CLI — only the front-end changes. Four
+tabs:
+
+- **💬 Chat** — the REPL in a browser. Interrupts (ingest review, stat/draft
+  confirms) render inline with ✅/❌ quick-reply buttons (`yes`/`no`, which every
+  confirm parser accepts) plus free text for corrections and block picks. The
+  sidebar file uploader replaces `/ingest <path>` and `/learn <path>`: a
+  training log goes through the normal HITL review; reference material embeds
+  straight into the knowledge base.
+- **🗂️ Organizer** (`src/tools/organize.py`) — fix ingest-time assignment
+  mistakes after the fact: reattach sessions to a different block (or detach
+  them), rename/merge/move programs and blocks, and **start a draft** (flip a
+  GENERATE-saved `draft` program to `incomplete` with a start date so it counts
+  in analysis).
+- **📥 Backfill** (`src/ingest/backfill.py`) — paste (or upload) years of
+  training history at once. `split_archive` cuts it into extraction-sized
+  chunks along session boundaries (date/week-label lines, blank-line gaps —
+  never mid-session), and each chunk runs through the same
+  extract → stage → commit pipeline. Two modes:
+  - *Stage for review* (default): every chunk lands `pending_review`; a
+    per-batch list below renders each one with commit/reject buttons and an
+    optional block attachment.
+  - *Commit everything*: relaxed bulk HITL — the run button is the one explicit
+    approval for the whole archive; every chunk still gets an `ingest_batch`
+    audit row, and a failed chunk is isolated, never aborting the run.
+- **🛠️ Dev Tools** (`src/tools/admin.py`) — a `st.data_editor` grid over any
+  allowlisted domain table with add/edit/delete applied via a diff
+  (`src/ui/editing.py`); one-click consistent DB backup (SQLite online backup
+  API → `data/backups/`); and the ingest-batch audit browser (status filter +
+  pretty-printed `parsed_json`). This surface deliberately bypasses the agent's
+  HITL flow — every write is an explicit hand edit — and it is *not* exposed to
+  the LLM as a tool.
+
+The chat turn driver (`src/ui/driver.py`) and editor diff are streamlit-free
+and unit-tested; the `*_tab.py` modules are thin rendering veneers. Covered by
+`tests/test_organize.py`, `tests/test_admin.py`, `tests/ingest/test_backfill.py`,
+and `tests/test_ui.py` — no live models, no browser needed.
+
 ## What's here vs. what's not
 
 Implemented: `src/db/schema.sql`, `src/db/connection.py`, `src/tools/resolve.py`,
@@ -361,10 +407,12 @@ cloud provider branch (`src/agent/nodes/generate.py`, `src/tools/draft.py`,
 cloud branches in `src/ingest/extract.py` / `src/agent/llm_provider.py`)
 (Step 7); xlsx/pdf loaders and knowledge-base ingestion + `search_knowledge`
 (`src/ingest/loaders.py`, `src/ingest/knowledge.py`, `search_knowledge` in
-`src/tools/vector.py`, `/learn` in `src/cli.py`) (Step 8); full pytest coverage
-throughout (198 tests).
+`src/tools/vector.py`, `/learn` in `src/cli.py`) (Step 8); the Streamlit UI,
+organizer ops, backfill pipeline, and dev tooling (`src/ui/`,
+`src/tools/organize.py`, `src/tools/admin.py`, `src/ingest/backfill.py`)
+(Step 9); full pytest coverage throughout (240 tests).
 
-Explicitly not implemented (future steps per `ARCHITECTURE.md` /
-`IMPLEMENTATION_ROADMAP.md`): Streamlit/Gradio UI, historical backfill, the
-`display_unit: kg` end-to-end pass, block-review / form-cue embedding paths, and
-the program/block organizer (all Stage 9).
+Remaining optional polish (per `IMPLEMENTATION_ROADMAP.md` Stage 9 grab-bag):
+the `display_unit: kg` end-to-end pass, block-review / form-cue embedding paths
+(`doc_type='block_review'|'form_cue'` exist in the design but nothing writes
+them yet), and a re-embedding command for embedder swaps.

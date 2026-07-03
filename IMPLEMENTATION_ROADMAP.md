@@ -34,7 +34,7 @@ reasoning low < medium < high.)
 The only genuinely tricky function is `compare_programmed_vs_actual`.
 
 **Status:** implemented. 107 tests passing (67 prior + 40 new). See
-`HANDOFF_STEP_8.md` (the current handoff) for current state,
+`HANDOFF_STEP_9.md` (the current handoff) for current state,
 and the "Full tool layer (Step 4)"
 section of `README.md` for usage. Resolved decisions (see that section for the
 "why"): `get_volume_trend` returns both hard-set count and tonnage, bodyweight
@@ -109,7 +109,7 @@ the highest-risk stage: LangGraph `interrupt()`/resume semantics with a
 LLM. Getting the HITL contract wrong here poisons Stages 6–7.
 
 **Status:** implemented. 141 tests passing (107 prior + 34 new). See
-`HANDOFF_STEP_8.md` (the current handoff) for the full writeup and the
+`HANDOFF_STEP_9.md` (the current handoff) for the full writeup and the
 "LangGraph agent core + CLI"
 section of `README.md` for usage. All five open decisions resolved — see the
 "Decisions" section below, now recording the final calls.
@@ -190,7 +190,7 @@ left clean scaffolding). The code volume is moderate, but making a *local Qwen3
 benefits from stronger judgment.
 
 **Status:** implemented. 161 tests passing (141 prior + 20 new). See
-`HANDOFF_STEP_8.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
+`HANDOFF_STEP_9.md` for the full writeup and the "ANALYZE + SYNTHESIZE +
 UPDATE_STATS (Step 6)" section of `README.md` for usage. All four open decisions
 resolved — see the "✅ Decisions" section below, now recording the final calls.
 
@@ -252,7 +252,7 @@ stage is in the GENERATE system prompt, and drafting/iterating that prompt is
 where opus + medium pays for itself. Recommendation: opus + medium.
 
 **Status:** implemented. 171 tests passing (161 prior + 10 net new). See
-`HANDOFF_STEP_8.md` for the full writeup and the "GENERATE (program writer) +
+`HANDOFF_STEP_9.md` for the full writeup and the "GENERATE (program writer) +
 cloud offload (Step 7)" section of `README.md` for usage. All four open
 decisions resolved — see the "✅ Decisions" section below, now recording the
 final calls.
@@ -321,7 +321,7 @@ established pipeline shape. Independent of Stages 5–7; can run any time after
 Stage 3 (only `search_knowledge` registration depends on Stage 6's tool wiring).
 
 **Status:** implemented. 198 tests passing (171 prior + 27 new). See
-`HANDOFF_STEP_8.md` for the full writeup and the "File loaders + knowledge base
+`HANDOFF_STEP_9.md` for the full writeup and the "File loaders + knowledge base
 (Step 8)" section of `README.md` for usage. All three open decisions resolved —
 see the "✅ Decisions" section below, now recording the final calls.
 
@@ -371,9 +371,21 @@ see the "✅ Decisions" section below, now recording the final calls.
 
 ---
 
-## Stage 9 (optional) — Polish: Streamlit/Gradio UI, backfill, ops
+## Stage 9 (optional) — Polish: Streamlit/Gradio UI, backfill, ops ✅ DONE (2026-07-03)
 
 **Minimum effective model: sonnet + medium.**
+
+**Status:** implemented. 240 tests passing (198 prior + 42 new). See
+`HANDOFF_STEP_9.md` for the full writeup and the "Streamlit UI + backfill +
+organizer + dev tools (Step 9)" section of `README.md` for usage. Built from
+the grab-bag: the Streamlit UI (`streamlit run src/ui/app.py` — chat with
+interrupt round-trips, organizer, backfill, and dev-tools tabs), the
+program/block organizer (`src/tools/organize.py`, incl. the "start this draft"
+flow), historical backfill (`src/ingest/backfill.py`), and the ops niceties
+(DB backup, `ingest_batch` audit browser, direct table CRUD in
+`src/tools/admin.py`). Deliberately *not* built (still open, none
+load-bearing): the `display_unit: kg` end-to-end pass, block-review /
+form-cue embedding paths, and a re-embedding command for embedder swaps.
 
 Only start once the CLI flow is stable (§7 roadmap). Grab-bag, pick what matters:
 
@@ -392,13 +404,22 @@ Only start once the CLI flow is stable (§7 roadmap). Grab-bag, pick what matter
   merge programs/blocks, and fix ingest-time assignment mistakes — so block
   assignment at ingest never has to be perfect.
 
-### ⚠️ Decisions
+### ✅ Decisions (resolved by the user, 2026-07-03 — now locked in)
 
-- Streamlit vs. Gradio (recommendation: Streamlit — better chat + interrupt
-  ergonomics as of early 2026, but either works).
-- Whether block reviews get their own ingestion path (they're prose sections in
-  your macrocycle docs; needs a small extraction prompt + `block.review_text`
-  update + Chroma embed).
+- **Streamlit vs. Gradio**: **Streamlit** (user's call, matching the
+  recommendation). Tab layout per the user's spec — Chat (main), Organizer,
+  Dev Tools — plus a dedicated **Backfill** tab (historical backfill is a
+  data-entry workflow, not a dev QoL tool, so it got its own tab).
+- **Bulk-backfill HITL**: two modes. *Stage for review* keeps the per-batch
+  approval contract (chunks land `pending_review`, reviewed/committed one by
+  one in the Backfill tab); *Commit everything* is the relaxed `--bulk`
+  equivalent — the single explicit "run and commit" click approves the whole
+  archive, with every chunk still audited in `ingest_batch`.
+- **Dev-tools CRUD sits outside the HITL interrupt flow** by design: every
+  write is an explicit hand edit in the grid, and the surface is never exposed
+  to the LLM as a tool.
+- **Block reviews do NOT get their own ingestion path yet** (the second open
+  decision): deferred; nothing writes `doc_type='block_review'|'form_cue'`.
 
 ---
 

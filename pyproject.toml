@@ -15,6 +15,8 @@ dependencies = [
     "anthropic>=0.60",
     "openpyxl>=3.1",
     "pypdf>=6.0",
+    "streamlit>=1.40",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
