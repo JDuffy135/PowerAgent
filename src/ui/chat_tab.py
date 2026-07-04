@@ -72,7 +72,12 @@ def _send(graph, text: str) -> None:
 
 def _save_upload(uploaded) -> Path:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = UPLOADS_DIR / uploaded.name
+    # The upload name is client-supplied: keep only the basename so a crafted
+    # name (e.g. containing "../") can never write outside data/uploads/.
+    safe_name = Path(uploaded.name).name
+    if not safe_name or safe_name in {".", ".."}:
+        safe_name = "upload"
+    dest = UPLOADS_DIR / safe_name
     dest.write_bytes(uploaded.getbuffer())
     return dest
 

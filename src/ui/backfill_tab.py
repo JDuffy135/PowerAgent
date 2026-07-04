@@ -141,6 +141,8 @@ def _pending_section(conn, display_unit: str = "lb") -> None:
                 except Exception as exc:
                     st.error(f"Commit failed: {exc}")
                 else:
+                    if result.embed_error:
+                        st.warning(f"Committed, but notes were not embedded: {result.embed_error}")
                     st.success(f"Committed: {result.sessions_created} session(s), "
                                f"{result.sets_created} set(s).")
                     st.rerun()

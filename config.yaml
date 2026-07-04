@@ -51,6 +51,10 @@ nodes:
   # from the env var named by api_key_env (never required for local nodes).
   # Flip provider -> local (e.g. qwen3.6:35b-a3b + host) to keep it on-box.
   generate:
-    provider: cloud
-    model: claude-sonnet-5
-    api_key_env: ANTHROPIC_API_KEY
+    provider: local
+    model: qwen3.6:35b-a3b
+    host: http://localhost:11434
+  # generate:
+  #   provider: cloud
+  #   model: claude-sonnet-5
+  #   api_key_env: ANTHROPIC_API_KEY

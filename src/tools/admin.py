@@ -137,6 +137,55 @@ def delete_row(conn: sqlite3.Connection, table: str, pk_value) -> None:
         raise AdminError(f"No {table} row with {pk}={pk_value!r}")
 
 
+# Children before parents, so FK constraints never block a wipe. Includes
+# ingest_batch (the audit trail) since "clear everything" means everything --
+# it has no FK dependents so it can go anywhere, listed last for clarity.
+CLEAR_ALL_TABLES: tuple[str, ...] = (
+    "lift_set", "cardio", "pr", "programmed_slot", "exercise_alias",
+    "measurement", "bodyweight", "injury",
+    "session", "block", "exercise", "program",
+    "ingest_batch",
+)
+
+CONFIRMATION_PHRASE = "delete all data"
+
+
+def clear_all_data(
+    conn: sqlite3.Connection, confirmation: str, *, chroma_client=None
+) -> dict[str, int]:
+    """Wipe every training table. Requires the caller to pass the exact
+    confirmation phrase (the UI's typed safety fallback) -- this is the last
+    line of defense against an accidental call, not a UI concern.
+
+    `chroma_client`, if given, also drops the `personal_notes` collection --
+    session notes, stored analyses, reviews, and form cues are all derived
+    from the wiped training data, and leaving them embedded would keep the
+    coach "remembering" deleted history. The reference `knowledge` collection
+    is untouched (it isn't training data)."""
+    if confirmation.strip().lower() != CONFIRMATION_PHRASE:
+        raise AdminError(f"Confirmation phrase did not match {CONFIRMATION_PHRASE!r}")
+    counts: dict[str, int] = {}
+    try:
+        for table in CLEAR_ALL_TABLES:
+            counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise AdminError(f"Clearing all data failed: {exc}") from exc
+
+    if chroma_client is not None:
+        from src.ingest.embed import PERSONAL_NOTES_COLLECTION
+
+        try:
+            collection = chroma_client.get_collection(PERSONAL_NOTES_COLLECTION)
+            counts["personal_notes (chroma)"] = collection.count()
+            chroma_client.delete_collection(PERSONAL_NOTES_COLLECTION)
+        except Exception:
+            counts["personal_notes (chroma)"] = 0  # collection didn't exist
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # DB backup
 # ---------------------------------------------------------------------------

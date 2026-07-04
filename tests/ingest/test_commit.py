@@ -342,3 +342,30 @@ def test_commit_with_unknown_block_raises_and_writes_nothing(conn):
         "SELECT status FROM ingest_batch WHERE batch_id = ?", (batch_id,)
     ).fetchone()["status"]
     assert status == "pending_review"  # still committable after fixing the block id
+
+
+def test_embed_failure_after_commit_is_reported_not_raised(conn):
+    """A dead embedder must not make a committed batch look failed -- the
+    SQLite data is durable at that point and re-ingesting would duplicate it."""
+    batch_id = stage_batch(conn, _known_batch(), source_file="w1.txt")
+
+    def broken_embedder(texts):
+        raise RuntimeError("Ollama embed request failed")
+
+    class _NoopClient:
+        def get_or_create_collection(self, name):
+            return object()  # never written to: the embedder fails first
+
+    result = commit_batch(
+        conn, batch_id, embedder=broken_embedder, chroma_client=_NoopClient()
+    )
+
+    assert result.committed is True
+    assert result.sessions_created == 1
+    assert result.notes_embedded == 0
+    assert result.embed_error is not None
+    assert "Ollama embed request failed" in result.embed_error
+    status = conn.execute(
+        "SELECT status FROM ingest_batch WHERE batch_id = ?", (batch_id,)
+    ).fetchone()["status"]
+    assert status == "committed"

@@ -8,8 +8,11 @@ import pytest
 from src.ingest.models import ParsedBatch, ParsedSession
 from src.ingest.stage import stage_batch
 from src.tools.admin import (
+    CLEAR_ALL_TABLES,
+    CONFIRMATION_PHRASE,
     AdminError,
     backup_db,
+    clear_all_data,
     count_rows,
     delete_row,
     fetch_table,
@@ -82,6 +85,37 @@ def test_text_pk_table(conn):
 
 
 # ---------------------------------------------------------------------------
+# Clear all data
+# ---------------------------------------------------------------------------
+
+def test_clear_all_data_wipes_every_table(conn):
+    assert count_rows(conn, "session") > 0  # seeded fixture has data
+
+    counts = clear_all_data(conn, CONFIRMATION_PHRASE)
+
+    for table in CLEAR_ALL_TABLES:
+        if table == "ingest_batch":
+            assert conn.execute("SELECT COUNT(*) FROM ingest_batch").fetchone()[0] == 0
+        else:
+            assert count_rows(conn, table) == 0
+    assert counts["session"] > 0  # reports pre-wipe counts
+
+
+def test_clear_all_data_rejects_wrong_phrase(conn):
+    before = count_rows(conn, "session")
+    with pytest.raises(AdminError):
+        clear_all_data(conn, "nope")
+    with pytest.raises(AdminError):
+        clear_all_data(conn, "")
+    assert count_rows(conn, "session") == before
+
+
+def test_clear_all_data_phrase_is_case_and_whitespace_insensitive(conn):
+    clear_all_data(conn, f"  {CONFIRMATION_PHRASE.upper()}  ")
+    assert count_rows(conn, "session") == 0
+
+
+# ---------------------------------------------------------------------------
 # Backup
 # ---------------------------------------------------------------------------
 
@@ -119,3 +153,25 @@ def test_list_batches_and_json(conn):
     assert '"raw_note": "squats"' in pretty
     with pytest.raises(AdminError):
         get_batch_json(conn, 999999)
+
+
+def test_clear_all_data_also_wipes_personal_notes(conn, fake_embedder, chroma_client):
+    from src.ingest.embed import PERSONAL_NOTES_COLLECTION, SessionNote, embed_session_notes
+
+    embed_session_notes(
+        [SessionNote(session_id=1, date="2026-07-01", raw_note="squats felt heavy", exercises=[])],
+        embedder=fake_embedder,
+        client=chroma_client,
+    )
+
+    counts = clear_all_data(conn, CONFIRMATION_PHRASE, chroma_client=chroma_client)
+
+    assert counts["personal_notes (chroma)"] == 1
+    existing = {c.name for c in chroma_client.list_collections()}
+    assert PERSONAL_NOTES_COLLECTION not in existing
+
+
+def test_clear_all_data_missing_notes_collection_is_fine(conn, chroma_client):
+    counts = clear_all_data(conn, CONFIRMATION_PHRASE, chroma_client=chroma_client)
+    assert counts["personal_notes (chroma)"] == 0
+    assert count_rows(conn, "session") == 0

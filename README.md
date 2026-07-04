@@ -246,7 +246,7 @@ full picture.
 ## Development
 
 ```bash
-pytest        # 278 tests, in-memory SQLite seeded per test, no live models
+pytest        # 287 tests, in-memory SQLite seeded per test, no live models
 ```
 
 Project layout:

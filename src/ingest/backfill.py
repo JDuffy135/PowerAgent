@@ -174,6 +174,9 @@ def run_backfill(
                 result.status = "committed"
                 result.sessions = commit.sessions_created
                 result.sets = commit.sets_created
+                if commit.embed_error:
+                    # Data is committed; only the Chroma embed failed.
+                    result.error = f"notes not embedded: {commit.embed_error}"
         except Exception as exc:  # isolate the bad chunk, keep going
             # batch_id is non-None here iff staging succeeded but the commit
             # failed -- the batch stays pending_review for manual follow-up.

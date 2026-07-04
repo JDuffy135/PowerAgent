@@ -330,6 +330,11 @@ def make_ingest_commit_node(
             f"{result.exercises_created} new exercise(s), "
             f"{result.notes_embedded} note(s) embedded. Attached to {attached}."
         )
+        if result.embed_error:
+            summary += (
+                f" (Warning: session notes could not be embedded -- {result.embed_error}. "
+                "The training data IS saved; do not re-ingest.)"
+            )
         if result.programmed_slots_skipped:
             summary += (
                 f" ({result.programmed_slots_skipped} programmed slot(s) not inserted "

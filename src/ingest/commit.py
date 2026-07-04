@@ -47,6 +47,10 @@ class CommitResult(BaseModel):
     programmed_slots_skipped: int = 0
     exercises_created: int = 0
     notes_embedded: int = 0
+    # Set when the post-commit Chroma embed failed (e.g. Ollama down). The
+    # SQLite data IS committed in that case -- callers should warn, never
+    # re-ingest (that would duplicate sessions).
+    embed_error: str | None = None
 
 
 class BatchNotCommittable(Exception):
@@ -132,15 +136,23 @@ def commit_batch(
         raise
 
     # Chroma is not part of the SQLite transaction (different store, not
-    # transactional). Embedding is best-effort *after* the durable SQLite commit.
+    # transactional). Embedding is best-effort *after* the durable SQLite
+    # commit: a dead embedder must not make a committed batch look failed
+    # (re-ingesting it would duplicate sessions), so failures are reported
+    # via `embed_error` instead of raised.
     notes_embedded = 0
+    embed_error: str | None = None
     if embed_prose and notes:
-        notes_embedded = embed_session_notes(notes, embedder=embedder, client=chroma_client)
+        try:
+            notes_embedded = embed_session_notes(notes, embedder=embedder, client=chroma_client)
+        except Exception as exc:
+            embed_error = f"{type(exc).__name__}: {exc}"
 
     return CommitResult(
         batch_id=batch_id,
         committed=True,
         notes_embedded=notes_embedded,
+        embed_error=embed_error,
         **counts,
     )
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import signal
 import sqlite3
+import threading
 
 import sqlglot
 from pydantic import BaseModel
@@ -48,11 +49,16 @@ def _validate_select(query: str) -> None:
 
 
 class _timeout_guard:
-    """Best-effort wall-clock timeout via SIGALRM. No-op on platforms without it."""
+    """Best-effort wall-clock timeout via SIGALRM. No-op on platforms without
+    it, and outside the main thread (signal handlers can only be installed
+    there -- Streamlit reruns execute in a worker thread)."""
 
     def __init__(self, seconds: float):
         self.seconds = seconds
-        self._supported = hasattr(signal, "SIGALRM")
+        self._supported = (
+            hasattr(signal, "SIGALRM")
+            and threading.current_thread() is threading.main_thread()
+        )
 
     def __enter__(self):
         if self._supported and self.seconds > 0:

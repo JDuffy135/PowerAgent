@@ -52,3 +52,36 @@ def test_run_readonly_sql_row_cap_truncates(conn):
 def test_run_readonly_sql_row_cap_not_truncated_when_under_limit(conn):
     result = run_readonly_sql(conn, "SELECT * FROM bodyweight", max_rows=100)
     assert result.truncated is False
+
+
+def test_run_readonly_sql_works_outside_main_thread():
+    """Streamlit executes reruns in a worker thread, where signal-based
+    timeouts are unavailable (signal.signal is main-thread-only). The query
+    must still run -- the timeout guard degrades to a no-op."""
+    import threading
+
+    from src.db.connection import get_conn, init_db
+    from src.seed import seed
+
+    # Same connection mode the Streamlit app uses (reruns hop threads).
+    threaded_conn = get_conn(":memory:", check_same_thread=False)
+    init_db(threaded_conn)
+    seed(threaded_conn)
+
+    results: dict = {}
+
+    def worker():
+        try:
+            results["result"] = run_readonly_sql(
+                threaded_conn, "SELECT COUNT(*) AS n FROM bodyweight"
+            )
+        except Exception as exc:  # pragma: no cover - the failure being tested
+            results["error"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    threaded_conn.close()
+
+    assert "error" not in results, f"raised in worker thread: {results.get('error')}"
+    assert results["result"].rows[0]["n"] == 9
