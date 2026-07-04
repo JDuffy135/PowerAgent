@@ -22,6 +22,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
+from src.agent import tracing
 from src.agent.graph import build_graph, get_checkpointer
 from src.agent.llm_provider import CONFIG_PATH, load_config
 from src.db.connection import get_conn, init_db
@@ -194,10 +195,15 @@ def main() -> None:
     init_db(conn)
     checkpointer = get_checkpointer()
     graph = build_graph(conn, checkpointer=checkpointer)
-    config = {
-        "configurable": {"thread_id": uuid.uuid4().hex},
-        "recursion_limit": 100,  # headroom for long correction loops
-    }
+    thread_id = uuid.uuid4().hex
+    config = tracing.attach_tracing(
+        {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": 100,  # headroom for long correction loops
+        },
+        thread_id=thread_id,
+        source="cli",
+    )
 
     print(BANNER)
     while True:
@@ -217,7 +223,9 @@ def main() -> None:
             run_reembed()
             continue
         run_turn(graph, config, make_input(line))
+        tracing.flush()  # spans visible in LangFuse after every turn
 
+    tracing.flush()
     conn.close()
 
 

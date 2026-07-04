@@ -17,6 +17,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from src.agent import tracing
 from src.cli import make_input
 from src.ingest.knowledge import KnowledgeDoc, ingest_knowledge_file
 from src.ui.driver import drive_turn, resume_payload
@@ -33,10 +34,13 @@ def _state() -> None:
 
 
 def _config() -> dict:
-    return {
+    base = {
         "configurable": {"thread_id": st.session_state.thread_id},
         "recursion_limit": 100,
     }
+    return tracing.attach_tracing(
+        base, thread_id=st.session_state.thread_id, source="streamlit"
+    )
 
 
 def _invoke(graph, payload) -> None:
@@ -50,6 +54,7 @@ def _invoke(graph, payload) -> None:
             {"role": "assistant", "content": f"error: {exc}", "kind": "error"}
         )
         ss.pending_interrupt = False
+        tracing.flush()  # partial spans from the failed turn still help debugging
         return
 
     for reply in result.replies:
@@ -60,6 +65,7 @@ def _invoke(graph, payload) -> None:
         )
     ss.chat_printed = result.printed
     ss.pending_interrupt = result.interrupt_prompt is not None
+    tracing.flush()  # push spans now so the turn is visible in LangFuse immediately
 
 
 def _send(graph, text: str) -> None:

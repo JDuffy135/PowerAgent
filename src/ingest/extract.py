@@ -83,6 +83,10 @@ def get_llm(
     schema; other structured-output nodes (e.g. the HITL correction pass) supply
     their own. `src.agent.llm_provider` re-exports this as the shared raw seam.
     """
+    # Imported here (not at module top): tracing lazily imports llm_provider,
+    # which imports this module — a top-level import would be circular.
+    from src.agent import tracing
+
     cfg = _node_config(node)
     provider = cfg.get("provider", "local")
     if schema is None:
@@ -91,7 +95,13 @@ def get_llm(
         system_prompt = EXTRACTION_SYSTEM_PROMPT
 
     if provider == "cloud":
-        return _cloud_llm(cfg, system_prompt=system_prompt, schema=schema)
+        return tracing.traced_llm(
+            _cloud_llm(cfg, system_prompt=system_prompt, schema=schema),
+            node=node,
+            model=cfg.get("model", DEFAULT_CLOUD_MODEL),
+            provider="cloud",
+            system_prompt=system_prompt,
+        )
     if provider != "local":
         raise ValueError(f"Unknown provider {provider!r} for node {node!r} (use 'local' or 'cloud')")
 
@@ -122,7 +132,9 @@ def get_llm(
             ) from exc
         return body["message"]["content"]
 
-    return _call
+    return tracing.traced_llm(
+        _call, node=node, model=model, provider="local", system_prompt=system_prompt
+    )
 
 
 def _node_config(node: str) -> dict:

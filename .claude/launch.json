@@ -15,6 +15,21 @@
         "8501"
       ],
       "port": 8501
+    },
+    {
+      "name": "powerlifting-ui-preview",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "streamlit",
+        "run",
+        "src/ui/app.py",
+        "--server.headless",
+        "true",
+        "--server.port",
+        "8502"
+      ],
+      "port": 8502
     }
   ]
 }

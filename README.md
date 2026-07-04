@@ -243,10 +243,35 @@ full picture.
 
 ---
 
+## Debugging with LangFuse
+
+Every chat turn can be traced to a **self-hosted LangFuse** instance so you can
+inspect the agent's reasoning step by step: the router's intent call, every
+tool call in the ANALYZE/GENERATE ReAct loops (arguments + results), every LLM
+generation (prompt, output, model, latency), and HITL interrupt round-trips
+grouped into one session per conversation.
+
+```bash
+docker compose -f observability/docker-compose.yml up -d   # LangFuse at :3000
+export LANGFUSE_PUBLIC_KEY=...   # from observability/.env
+export LANGFUSE_SECRET_KEY=...
+streamlit run src/ui/app.py      # or python -m src.cli
+```
+
+Traces appear at <http://localhost:3000> — use the **Sessions** view for a
+whole conversation (the chat thread id is the session id) and the **Traces**
+view for a single turn; traces are tagged `streamlit` or `cli`. Tracing is
+controlled by the `langfuse:` section of `config.yaml` and is a **silent
+no-op** whenever it's disabled, the keys are unset, or the server is down —
+the app never requires LangFuse. Full setup details:
+[`observability/README.md`](observability/README.md).
+
+---
+
 ## Development
 
 ```bash
-pytest        # 287 tests, in-memory SQLite seeded per test, no live models
+pytest        # 299 tests, in-memory SQLite seeded per test, no live models
 ```
 
 Project layout:
